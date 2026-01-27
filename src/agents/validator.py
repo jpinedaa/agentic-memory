@@ -24,10 +24,7 @@ class ValidatorAgent(WorkerAgent):
         )
         self._checked_pairs: set[tuple[str, str]] = set()
 
-    def watch_query(self) -> str:
-        return "what recent claims exist that might contradict each other?"
-
-    async def process(self, context: str) -> list[str]:
+    async def process(self) -> list[str]:
         """Check for contradicting claims and flag them."""
         claims = await self.memory.store.find_recent_claims(limit=20)
 

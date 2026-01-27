@@ -46,7 +46,7 @@ async def test_meeting_preferences_scenario(system):
     assert obs1_id is not None
 
     # Step 2: Inference agent processes the observation
-    claims1 = await inference.process("new observations available")
+    claims1 = await inference.process()
     assert len(claims1) > 0
     for claim_text in claims1:
         await memory.claim(claim_text, source="inference_agent")
@@ -59,13 +59,13 @@ async def test_meeting_preferences_scenario(system):
     assert obs2_id is not None
 
     # Step 4: Inference agent processes the new observation
-    claims2 = await inference.process("new observations available")
+    claims2 = await inference.process()
     assert len(claims2) > 0
     for claim_text in claims2:
         await memory.claim(claim_text, source="inference_agent")
 
     # Step 5: Validator agent checks for contradictions
-    contradiction_claims = await validator.process("check for contradictions")
+    contradiction_claims = await validator.process()
     # There may or may not be detected contradictions depending on
     # how the LLM structured the claims — the validator checks by
     # matching subject+predicate pairs with different objects.

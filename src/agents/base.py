@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 class WorkerAgent(ABC):
     """Abstract base for continuously-running worker agents.
 
-    Subclasses define what they watch for and how they process it.
+    Subclasses implement process() to check the store and return claims.
     The run loop handles polling and error recovery.
     """
 
@@ -34,30 +34,24 @@ class WorkerAgent(ABC):
         self._running = False
 
     @abstractmethod
-    def watch_query(self) -> str:
-        """Natural language query describing what this agent monitors."""
-        ...
-
-    @abstractmethod
-    async def process(self, context: str) -> list[str]:
-        """Analyze context and return claim texts to assert.
+    async def process(self) -> list[str]:
+        """Check the store for work and return claim texts to assert.
 
         Returns an empty list if no action needed.
         """
         ...
 
     async def run(self) -> None:
-        """Main agent loop. Polls memory and makes claims."""
+        """Main agent loop. Polls and makes claims."""
         self._running = True
         logger.info(f"Agent {self.source_id} started")
 
         while self._running:
             try:
-                context = await self.memory.remember(self.watch_query())
-                claims = await self.process(context)
+                claims = await self.process()
                 for claim_text in claims:
                     await self.memory.claim(claim_text, source=self.source_id)
-                    logger.info(f"Agent {self.source_id} claimed: {claim_text[:80]}")
+                    logger.info(f"Agent {self.source_id} claimed: {claim_text[:100]}")
             except Exception:
                 logger.exception(f"Agent {self.source_id} error in loop")
 
