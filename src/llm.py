@@ -1,14 +1,18 @@
 """LLM translation layer using Anthropic Claude API.
 
 Translates between natural language and structured graph operations.
+Uses tool_use for structured extraction to guarantee valid JSON.
 """
 
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass, field
 
 import anthropic
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -42,50 +46,88 @@ class ClaimData:
     contradicts_description: str | None = None
 
 
-OBSERVATION_EXTRACTION_PROMPT = """\
-You are a knowledge extraction system. Given an observation text, extract structured data.
+# -- Tool schemas for structured output --
 
-Return a JSON object with:
-- "entities": list of entity names mentioned (e.g. ["user", "project alpha"])
-- "extractions": list of relationships, each with "subject", "predicate", "object"
-- "topics": list of topic keywords
+OBSERVATION_TOOL = {
+    "name": "record_observation",
+    "description": "Record the structured data extracted from an observation.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "entities": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Entity names mentioned, lowercase (e.g. ['user', 'project alpha'])",
+            },
+            "extractions": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "subject": {"type": "string"},
+                        "predicate": {"type": "string"},
+                        "object": {"type": "string"},
+                    },
+                    "required": ["subject", "predicate", "object"],
+                },
+                "description": "Extracted relationships",
+            },
+            "topics": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Topic keywords",
+            },
+        },
+        "required": ["entities", "extractions", "topics"],
+    },
+}
+
+CLAIM_TOOL = {
+    "name": "record_claim",
+    "description": "Record the structured data parsed from a claim.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "subject": {"type": "string", "description": "The entity being described"},
+            "predicate": {"type": "string", "description": "The relationship or attribute"},
+            "object": {"type": "string", "description": "The value or target"},
+            "confidence": {
+                "type": "number",
+                "description": "Certainty 0.0-1.0. Hedging language = lower, definitive = higher.",
+            },
+            "basis_descriptions": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Descriptions of what this claim is based on",
+            },
+            "supersedes_description": {
+                "type": ["string", "null"],
+                "description": "If this replaces a previous claim, describe what it replaces. null otherwise.",
+            },
+            "contradicts_description": {
+                "type": ["string", "null"],
+                "description": "If this contradicts another claim, describe what it contradicts. null otherwise.",
+            },
+        },
+        "required": ["subject", "predicate", "object", "confidence", "basis_descriptions"],
+    },
+}
+
+OBSERVATION_SYSTEM = """\
+You are a knowledge extraction system. Given an observation text, extract structured data \
+by calling the record_observation tool.
 
 Rules:
 - Use lowercase for entity names
 - Predicates should be simple verbs or verb phrases
 - Keep objects concise
-- Extract ALL meaningful relationships from the text
+- Extract ALL meaningful relationships from the text"""
 
-Example input: "user said they hate waking up early for meetings"
-Example output:
-{
-  "entities": ["user"],
-  "extractions": [
-    {"subject": "user", "predicate": "expressed", "object": "dislike of early meetings"},
-    {"subject": "user", "predicate": "mentioned", "object": "meetings"}
-  ],
-  "topics": ["meetings", "schedule", "morning"]
-}
-"""
+CLAIM_SYSTEM = """\
+You are a knowledge graph claim parser. Given a claim text and context about existing \
+knowledge, parse the claim by calling the record_claim tool.
 
-CLAIM_PARSING_PROMPT = """\
-You are a knowledge graph claim parser. Given a claim text and optional context about existing knowledge, parse the claim into structured data.
-
-Return a JSON object with:
-- "subject": the entity being described
-- "predicate": the relationship or attribute
-- "object": the value or target
-- "confidence": float 0.0-1.0 (infer from language certainty; hedging = lower, definitive = higher)
-- "basis_descriptions": list of descriptions of what this claim is based on (from the text)
-- "supersedes_description": if this claim replaces a previous one, describe what it replaces (or null)
-- "contradicts_description": if this claim contradicts another, describe what it contradicts (or null)
-
-Context about existing knowledge (may be empty):
-{context}
-
-Claim text to parse:
-{claim_text}
-"""
+Infer confidence from language: hedging = lower, definitive = higher."""
 
 QUERY_GENERATION_PROMPT = """\
 You are a knowledge graph query translator. Given a natural language question, generate a Cypher query to find relevant information in a Neo4j graph.
@@ -106,10 +148,9 @@ Relationships:
 - SUPERSEDES: from newer Claim to older one it replaces
 - CONTRADICTS: between conflicting Claims
 
-Return ONLY a valid Cypher query string. The query should return relevant nodes.
+Return ONLY a valid Cypher query string. No explanation, no markdown, no code fences.
 
-Question: {query}
-"""
+Question: {query}"""
 
 SYNTHESIS_PROMPT = """\
 You are a knowledge synthesis system. Given a question and graph data retrieved from a knowledge store, produce a clear natural language answer.
@@ -125,8 +166,7 @@ Rules:
 Question: {query}
 
 Retrieved data:
-{results}
-"""
+{results}"""
 
 
 class LLMTranslator:
@@ -137,41 +177,46 @@ class LLMTranslator:
         self._model = model
 
     async def extract_observation(self, text: str) -> ObservationData:
-        """Extract structured data from observation text."""
+        """Extract structured data from observation text using tool_use."""
         response = await self._client.messages.create(
             model=self._model,
             max_tokens=1024,
+            system=OBSERVATION_SYSTEM,
             messages=[
-                {
-                    "role": "user",
-                    "content": f"Extract structured data from this observation:\n\n{text}",
-                }
+                {"role": "user", "content": f"Extract structured data from this observation:\n\n{text}"}
             ],
-            system=OBSERVATION_EXTRACTION_PROMPT,
+            tools=[OBSERVATION_TOOL],
+            tool_choice={"type": "tool", "name": "record_observation"},
         )
-        data = self._parse_json_response(response)
+        data = self._extract_tool_input(response)
         return ObservationData(
             entities=data.get("entities", []),
-            extractions=[
-                Extraction(**e) for e in data.get("extractions", [])
-            ],
+            extractions=[Extraction(**e) for e in data.get("extractions", [])],
             topics=data.get("topics", []),
         )
 
     async def parse_claim(
         self, text: str, context: list[dict] | None = None
     ) -> ClaimData:
-        """Parse a claim text into structured data."""
-        context_str = json.dumps(context, indent=2) if context else "No existing context."
-        prompt = CLAIM_PARSING_PROMPT.format(
-            context=context_str, claim_text=text
-        )
+        """Parse a claim text into structured data using tool_use."""
+        context_str = json.dumps(context, indent=2, default=str) if context else "No existing context."
         response = await self._client.messages.create(
             model=self._model,
             max_tokens=1024,
-            messages=[{"role": "user", "content": prompt}],
+            system=CLAIM_SYSTEM,
+            messages=[
+                {
+                    "role": "user",
+                    "content": (
+                        f"Context about existing knowledge:\n{context_str}\n\n"
+                        f"Claim text to parse:\n{text}"
+                    ),
+                }
+            ],
+            tools=[CLAIM_TOOL],
+            tool_choice={"type": "tool", "name": "record_claim"},
         )
-        data = self._parse_json_response(response)
+        data = self._extract_tool_input(response)
         return ClaimData(
             subject=data["subject"],
             predicate=data["predicate"],
@@ -190,7 +235,13 @@ class LLMTranslator:
             max_tokens=512,
             messages=[{"role": "user", "content": prompt}],
         )
-        return self._extract_text(response).strip().strip("`")
+        cypher = self._extract_text(response).strip()
+        # Strip any markdown fencing the model might add
+        if cypher.startswith("```"):
+            lines = cypher.split("\n")
+            lines = [l for l in lines if not l.startswith("```")]
+            cypher = "\n".join(lines)
+        return cypher
 
     async def synthesize_response(
         self, query: str, results: list[dict]
@@ -213,12 +264,9 @@ class LLMTranslator:
                 return block.text
         return ""
 
-    def _parse_json_response(self, response: anthropic.types.Message) -> dict:
-        """Extract and parse JSON from a Claude response."""
-        text = self._extract_text(response)
-        # Handle markdown code blocks
-        if "```json" in text:
-            text = text.split("```json")[1].split("```")[0]
-        elif "```" in text:
-            text = text.split("```")[1].split("```")[0]
-        return json.loads(text.strip())
+    def _extract_tool_input(self, response: anthropic.types.Message) -> dict:
+        """Extract tool input from a tool_use response block."""
+        for block in response.content:
+            if block.type == "tool_use":
+                return block.input
+        raise ValueError(f"No tool_use block in response: {response.content}")
