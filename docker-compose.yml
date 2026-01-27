@@ -16,6 +16,7 @@ services:
 
   redis:
     image: redis:7-alpine
+    command: redis-server --appendonly yes
     ports:
       - "6379:6379"
     volumes:
@@ -43,6 +44,12 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/v1/health')\""]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
 
   inference-agent:
     build: .
@@ -52,8 +59,10 @@ services:
       REDIS_URL: redis://redis:6379
       POLL_INTERVAL: "30"
     depends_on:
-      - api
-      - redis
+      api:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
 
   validator-agent:
     build: .
@@ -63,8 +72,10 @@ services:
       REDIS_URL: redis://redis:6379
       POLL_INTERVAL: "30"
     depends_on:
-      - api
-      - redis
+      api:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
 
 volumes:
   neo4j_data:

@@ -53,9 +53,26 @@ class WorkerAgent(ABC):
         return []
 
     async def run(self) -> None:
-        """Main agent loop. Event-driven with poll fallback."""
+        """Main agent loop. Event-driven with poll fallback.
+
+        Retries on startup connection errors (e.g. API not ready yet).
+        """
         self._running = True
         logger.info(f"Agent {self.source_id} started")
+
+        # Retry loop for initial connection
+        for attempt in range(1, 13):  # up to ~60s of retries
+            try:
+                await self._tick()
+                break
+            except Exception:
+                logger.warning(
+                    f"Agent {self.source_id} startup attempt {attempt}/12 failed, retrying..."
+                )
+                await asyncio.sleep(5)
+        else:
+            logger.error(f"Agent {self.source_id} could not connect after 12 attempts")
+            return
 
         if self.event_bus and self.event_channels():
             await self._run_event_driven()

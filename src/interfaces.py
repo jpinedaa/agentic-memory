@@ -257,7 +257,7 @@ class MemoryService:
             if block.type == "text":
                 text = block.text.strip()
                 break
-        if not text or text.upper() == "SKIP":
+        if not text or text.upper().startswith("SKIP"):
             return None
         return text
 

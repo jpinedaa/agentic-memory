@@ -8,6 +8,7 @@ persistent tracking and EventBus for event-driven wakeup.
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 from src.agents.base import WorkerAgent
@@ -40,6 +41,7 @@ class InferenceAgent(WorkerAgent):
             event_bus=event_bus,
             state=state,
         )
+        self._started_at = datetime.now(timezone.utc).isoformat()
 
     def event_channels(self) -> list[str]:
         return [CHANNEL_OBSERVATION]
@@ -51,6 +53,13 @@ class InferenceAgent(WorkerAgent):
         claims = []
         for obs in observations:
             obs_id = obs.get("id", "")
+
+            # Skip observations from before this agent started (stale data)
+            obs_ts = obs.get("timestamp", "")
+            if obs_ts and obs_ts < self._started_at:
+                if self.state:
+                    await self.state.mark_processed(STATE_KEY, obs_id)
+                continue
 
             # Check if already processed (Redis or in-memory)
             if self.state and await self.state.is_processed(STATE_KEY, obs_id):
