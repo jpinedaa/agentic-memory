@@ -1,8 +1,8 @@
 """CLI chat adapter.
 
 Provides a stdin/stdout interface for interacting with the memory system.
-Lines starting with '?' are treated as queries (remember).
-All other lines are treated as observations (observe).
+Uses MemoryAPI protocol — works with both in-process MemoryService
+and HTTP MemoryClient.
 """
 
 from __future__ import annotations
@@ -10,8 +10,10 @@ from __future__ import annotations
 import asyncio
 import logging
 import sys
+from typing import TYPE_CHECKING
 
-from src.interfaces import MemoryService
+if TYPE_CHECKING:
+    from src.memory_protocol import MemoryAPI
 
 logger = logging.getLogger(__name__)
 
@@ -32,16 +34,12 @@ Anything else is recorded as an observation.
 """
 
 
-async def _print_status(memory: MemoryService) -> None:
+async def _print_status(memory: MemoryAPI) -> None:
     """Print a summary of the current graph state."""
-    store = memory.store
-
-    observations = await store.find_recent_observations(limit=50)
-    claims = await store.find_recent_claims(limit=50)
-    contradictions = await store.find_unresolved_contradictions()
-
-    # Entities
-    entities = await store.query_by_type("Entity")
+    observations = await memory.get_recent_observations(limit=50)
+    claims = await memory.get_recent_claims(limit=50)
+    contradictions = await memory.get_unresolved_contradictions()
+    entities = await memory.get_entities()
 
     print("\n--- Graph Status ---\n")
 
@@ -81,7 +79,7 @@ async def _print_status(memory: MemoryService) -> None:
     print("\n--- End Status ---\n")
 
 
-async def run_cli(memory: MemoryService, source: str = "cli_user") -> None:
+async def run_cli(memory: MemoryAPI, source: str = "cli_user") -> None:
     """Run the interactive CLI loop."""
     print(HELP_TEXT)
     print("Ready. Type observations or ?queries:\n")
@@ -90,7 +88,6 @@ async def run_cli(memory: MemoryService, source: str = "cli_user") -> None:
 
     while True:
         try:
-            # Read from stdin without blocking the event loop
             line = await loop.run_in_executor(None, sys.stdin.readline)
             if not line:
                 break
@@ -112,12 +109,11 @@ async def run_cli(memory: MemoryService, source: str = "cli_user") -> None:
                 continue
 
             if line == "/clear":
-                await memory.store.clear_all()
+                await memory.clear()
                 print("Graph cleared.\n")
                 continue
 
             if line.startswith("?"):
-                # Query mode
                 query = line[1:].strip()
                 if not query:
                     print("Usage: ?<your question>")
@@ -126,7 +122,6 @@ async def run_cli(memory: MemoryService, source: str = "cli_user") -> None:
                 response = await memory.remember(query)
                 print(f"\n{response}\n")
             else:
-                # Observation mode
                 print("Recording observation...")
                 obs_id = await memory.observe(line, source=source)
                 print(f"Recorded. (id: {obs_id[:8]}...)\n")

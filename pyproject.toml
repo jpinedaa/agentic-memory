@@ -1,6 +1,6 @@
 [project]
 name = "agentic-memory"
-version = "0.1.0"
+version = "0.2.0"
 description = "A shared memory substrate for multiple agents, backed by a graph database"
 requires-python = ">=3.11"
 dependencies = [
@@ -10,9 +10,21 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+distributed = [
+    "fastapi>=0.115",
+    "uvicorn>=0.30",
+    "httpx>=0.25",
+    "redis[hiredis]>=5.0",
+    "sse-starlette>=2.0",
+]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
+    "fastapi>=0.115",
+    "uvicorn>=0.30",
+    "httpx>=0.25",
+    "redis[hiredis]>=5.0",
+    "sse-starlette>=2.0",
 ]
 
 [tool.pytest.ini_options]

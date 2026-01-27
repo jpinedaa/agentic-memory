@@ -1,15 +1,32 @@
 """Memory service interfaces.
 
 Framework-agnostic API that any agent runtime can call.
+Satisfies the MemoryAPI protocol for both in-process and distributed use.
 """
 
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import datetime, timezone
+from typing import Any
 
 from src.llm import LLMTranslator
 from src.store import TripleStore
+
+logger = logging.getLogger(__name__)
+
+INFERENCE_PROMPT = """\
+You are an inference agent for a knowledge system. Given an observation (something \
+a user said or did), produce a concise factual claim that can be stored in a knowledge graph.
+
+Rules:
+- State the inference as a direct factual claim (e.g. "user prefers afternoon meetings")
+- Do NOT repeat the observation verbatim — infer the underlying fact or preference
+- Keep it to one sentence
+- If the observation is too vague or meaningless to infer anything from, respond with exactly: SKIP
+
+Observation: {observation}"""
 
 
 def _new_id() -> str:
@@ -210,6 +227,42 @@ class MemoryService:
                 return claim
 
         return None
+
+    # -- Facade methods (satisfy MemoryAPI protocol) --
+
+    async def get_recent_observations(self, limit: int = 10) -> list[dict[str, Any]]:
+        return await self.store.find_recent_observations(limit=limit)
+
+    async def get_recent_claims(self, limit: int = 20) -> list[dict[str, Any]]:
+        return await self.store.find_recent_claims(limit=limit)
+
+    async def get_unresolved_contradictions(
+        self,
+    ) -> list[tuple[dict[str, Any], dict[str, Any]]]:
+        return await self.store.find_unresolved_contradictions()
+
+    async def get_entities(self) -> list[dict[str, Any]]:
+        return await self.store.query_by_type("Entity")
+
+    async def infer(self, observation_text: str) -> str | None:
+        """Use the LLM to produce an inference claim from an observation."""
+        prompt = INFERENCE_PROMPT.format(observation=observation_text)
+        response = await self.llm._client.messages.create(
+            model=self.llm._model,
+            max_tokens=256,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        text = ""
+        for block in response.content:
+            if block.type == "text":
+                text = block.text.strip()
+                break
+        if not text or text.upper() == "SKIP":
+            return None
+        return text
+
+    async def clear(self) -> None:
+        await self.store.clear_all()
 
 
 def _text_overlap(a: str, b: str) -> bool:

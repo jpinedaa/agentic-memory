@@ -1,88 +1,87 @@
 """Inference agent: converts observations into claims.
 
 Monitors new observations and generates inferred claims
-(e.g. "user said they hate early meetings" -> "user prefers afternoon meetings").
-Uses the LLM to produce meaningful inferences.
+via the MemoryAPI.infer() method. Uses AgentState for
+persistent tracking and EventBus for event-driven wakeup.
 """
 
 from __future__ import annotations
 
 import logging
-
-import anthropic
+from typing import TYPE_CHECKING
 
 from src.agents.base import WorkerAgent
+from src.events import CHANNEL_OBSERVATION
+
+if TYPE_CHECKING:
+    from src.agent_state import AgentState, InMemoryAgentState
+    from src.events import EventBus
+    from src.memory_protocol import MemoryAPI
 
 logger = logging.getLogger(__name__)
 
-INFERENCE_PROMPT = """\
-You are an inference agent for a knowledge system. Given an observation (something \
-a user said or did), produce a concise factual claim that can be stored in a knowledge graph.
-
-Rules:
-- State the inference as a direct factual claim (e.g. "user prefers afternoon meetings")
-- Do NOT repeat the observation verbatim — infer the underlying fact or preference
-- Keep it to one sentence
-- If the observation is too vague or meaningless to infer anything from, respond with exactly: SKIP
-
-Observation: {observation}"""
+STATE_KEY = "agent:inference:processed_obs"
 
 
 class InferenceAgent(WorkerAgent):
     """Watches for new observations and infers claims from them."""
 
-    def __init__(self, memory, poll_interval: float = 5.0) -> None:
+    def __init__(
+        self,
+        memory: MemoryAPI,
+        poll_interval: float = 30.0,
+        event_bus: EventBus | None = None,
+        state: AgentState | InMemoryAgentState | None = None,
+    ) -> None:
         super().__init__(
             source_id="inference_agent",
             memory=memory,
             poll_interval=poll_interval,
+            event_bus=event_bus,
+            state=state,
         )
-        self._processed_obs: set[str] = set()
+
+    def event_channels(self) -> list[str]:
+        return [CHANNEL_OBSERVATION]
 
     async def process(self) -> list[str]:
-        """Check for unprocessed observations and infer claims via LLM."""
-        observations = await self.memory.store.find_recent_observations(limit=10)
+        """Check for unprocessed observations and infer claims."""
+        observations = await self.memory.get_recent_observations(limit=10)
 
         claims = []
         for obs in observations:
             obs_id = obs.get("id", "")
-            if obs_id in self._processed_obs:
+
+            # Check if already processed (Redis or in-memory)
+            if self.state and await self.state.is_processed(STATE_KEY, obs_id):
                 continue
 
             raw = obs.get("raw_content", "")
             if not raw:
-                self._processed_obs.add(obs_id)
+                if self.state:
+                    await self.state.mark_processed(STATE_KEY, obs_id)
                 continue
 
-            self._processed_obs.add(obs_id)
+            # Distributed lock: only one instance processes each observation
+            if self.state:
+                acquired = await self.state.try_acquire(
+                    f"inference:{obs_id}", self.source_id, ttl=300
+                )
+                if not acquired:
+                    continue
+
             logger.info(f"InferenceAgent processing observation: {obs_id}")
 
-            # Use the LLM to generate a real inference
             try:
-                claim_text = await self._infer(raw)
+                claim_text = await self.memory.infer(raw)
                 if claim_text:
                     claims.append(claim_text)
+                else:
+                    logger.info("InferenceAgent skipped observation (no meaningful inference)")
             except Exception:
                 logger.exception(f"InferenceAgent failed to infer from: {obs_id}")
 
+            if self.state:
+                await self.state.mark_processed(STATE_KEY, obs_id)
+
         return claims
-
-    async def _infer(self, observation: str) -> str | None:
-        """Use the LLM to produce an inference claim from an observation."""
-        prompt = INFERENCE_PROMPT.format(observation=observation)
-        response = await self.memory.llm._client.messages.create(
-            model=self.memory.llm._model,
-            max_tokens=256,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        text = ""
-        for block in response.content:
-            if block.type == "text":
-                text = block.text.strip()
-                break
-
-        if not text or text.upper() == "SKIP":
-            logger.info("InferenceAgent skipped observation (no meaningful inference)")
-            return None
-
-        return text

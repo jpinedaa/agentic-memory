@@ -1,7 +1,9 @@
-"""Entry point for the Agentic Memory System.
+"""Entry point for the Agentic Memory System (dev mode).
 
-Starts Neo4j connection, creates MemoryService, spawns agent tasks
-and the CLI interface concurrently via asyncio.
+Runs everything in-process: CLI + agents via asyncio.gather().
+Uses InMemoryAgentState (no Redis required).
+
+For distributed mode, use docker-compose instead.
 """
 
 from __future__ import annotations
@@ -9,15 +11,16 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-import sys
 
 from dotenv import load_dotenv
 
 load_dotenv()
 
+from src.agent_state import AgentState, InMemoryAgentState
 from src.agents.inference import InferenceAgent
 from src.agents.validator import ValidatorAgent
 from src.cli import run_cli
+from src.events import EventBus
 from src.interfaces import MemoryService
 from src.llm import LLMTranslator
 from src.store import StoreConfig, TripleStore
@@ -26,15 +29,12 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
 )
-# Suppress noisy Neo4j warnings about unknown labels/properties on empty DB
 logging.getLogger("neo4j.notifications").setLevel(logging.ERROR)
-# Suppress httpx request logging
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 
 async def main() -> None:
-    # Configuration from environment
     config = StoreConfig(
         uri=os.environ.get("NEO4J_URI", "bolt://localhost:7687"),
         username=os.environ.get("NEO4J_USERNAME", "neo4j"),
@@ -42,6 +42,7 @@ async def main() -> None:
     )
     anthropic_key = os.environ.get("ANTHROPIC_API_KEY")
     llm_model = os.environ.get("LLM_MODEL", "claude-sonnet-4-20250514")
+    redis_url = os.environ.get("REDIS_URL", "")
 
     # Connect to Neo4j
     logger.info("Connecting to Neo4j at %s", config.uri)
@@ -52,9 +53,28 @@ async def main() -> None:
     llm = LLMTranslator(api_key=anthropic_key, model=llm_model)
     memory = MemoryService(store=store, llm=llm)
 
+    # Set up state backend: Redis if available, in-memory otherwise
+    event_bus = None
+    state: AgentState | InMemoryAgentState
+    if redis_url:
+        try:
+            state = AgentState(redis_url=redis_url)
+            event_bus = EventBus(redis_url=redis_url)
+            logger.info("Using Redis for agent state and events")
+        except Exception:
+            logger.warning("Redis unavailable, falling back to in-memory state")
+            state = InMemoryAgentState()
+    else:
+        state = InMemoryAgentState()
+        logger.info("No REDIS_URL set, using in-memory agent state")
+
     # Create agents
-    inference_agent = InferenceAgent(memory=memory, poll_interval=5.0)
-    validator_agent = ValidatorAgent(memory=memory, poll_interval=8.0)
+    inference_agent = InferenceAgent(
+        memory=memory, poll_interval=5.0, event_bus=event_bus, state=state,
+    )
+    validator_agent = ValidatorAgent(
+        memory=memory, poll_interval=8.0, event_bus=event_bus, state=state,
+    )
 
     # Run CLI + agents concurrently
     try:
@@ -69,6 +89,9 @@ async def main() -> None:
         inference_agent.stop()
         validator_agent.stop()
         await store.close()
+        if event_bus:
+            await event_bus.close()
+        await state.close()
         logger.info("Shutdown complete")
 
 

@@ -615,23 +615,29 @@ Human → Chat Interface → remember("what are my meeting preferences?")
 
 ## 10. Open Questions
 
-### 10.1 For Prototype
+### 10.1 Resolved (v0.1–v0.2)
 
-1. **LLM choice**: Claude API? GPT-4? Local model?
-2. **Agent orchestration**: Simple async loops? Task queue (Celery)?
-3. **Chat interface**: CLI? Basic web UI?
+1. ~~**LLM choice**~~: Anthropic Claude API (tool_use for structured output)
+2. ~~**Agent orchestration**~~: asyncio in dev mode; separate processes + Redis pub/sub in distributed mode
+3. ~~**Chat interface**~~: CLI (stdin/stdout)
+4. ~~**Subscription model**~~: Redis pub/sub with polling fallback (30s)
 
-### 10.2 For Later
+### 10.2 Open
 
-1. **Subscription model**: How do agents get notified of relevant changes without polling?
-2. **Confidence calibration**: Should confidence be normalized across agents?
-3. **Memory decay**: Do old, low-confidence claims eventually get pruned?
-4. **Scoping/namespacing**: Can there be isolated memory regions?
-5. **Access control**: Can certain claims be private to certain agents?
+1. **Confidence calibration**: Should confidence be normalized across agents?
+2. **Memory decay**: Do old, low-confidence claims eventually get pruned?
+3. **Scoping/namespacing**: Can there be isolated memory regions?
+4. **Access control**: Can certain claims be private to certain agents?
+5. **Agent framework integration**: How to best wrap MemoryAPI as tools for LangGraph, CrewAI, etc.?
 
 ---
 
-## 11. File Structure (Proposed)
+## 11. File Structure
+
+See Section 13.5 for the current file structure (v0.2). The original v0.1 proposal below was simplified during implementation (flattened modules, no subdirectories for store/interface/llm).
+
+<details>
+<summary>Original v0.1 proposal (superseded)</summary>
 
 ```
 memory-system/
@@ -665,6 +671,7 @@ memory-system/
 │   └── ...
 └── main.py                     # Entry point, orchestration
 ```
+</details>
 
 ---
 
@@ -694,9 +701,9 @@ memory-system/
 
 ---
 
-*Document version: 0.3*
+*Document version: 0.4*
 *Last updated: 2026-01-27*
-*Status: v0.1 implementation complete, pending integration testing*
+*Status: v0.2 distributed architecture implemented*
 
 ---
 
@@ -754,7 +761,154 @@ class MemoryService:
 
 To swap agent frameworks later: wrap these methods as tools/functions for the target framework. Core API unchanged.
 
-### 12.4 Implementation Phases
+### 12.4 Data Flow
+
+#### Observation Flow (user input → graph)
+
+```
+User types: "I prefer morning meetings"
+    │
+    ▼
+CLI (src/cli.py)
+    │ calls memory.observe(text, source="cli_user")
+    ▼
+MemoryService.observe() (src/interfaces.py)
+    │ 1. Calls llm.extract_observation(text)
+    ▼
+LLMTranslator.extract_observation() (src/llm.py)
+    │ Claude tool_use → structured ObservationData:
+    │   entities: ["user"]
+    │   extractions: [{subject: "user", predicate: "prefers", object: "morning meetings"}]
+    │   topics: ["meetings", "schedule"]
+    │
+    ▼ (back in MemoryService.observe)
+    │ 2. store.create_node(obs_id, {type: "Observation", raw_content: ...})
+    │ 3. store.get_or_create_entity("user") → entity node
+    │ 4. store.create_relationship(obs_id, "SUBJECT", entity_id)
+    │ 5. For each extraction: store.create_node(triple_id, {type: "ExtractedTriple", ...})
+    │    store.create_relationship(obs_id, "HAS_EXTRACTION", triple_id)
+    ▼
+Neo4j Graph:
+    (obs_abc) --SUBJECT--> (entity_user)
+    (obs_abc) --HAS_EXTRACTION--> (triple_xyz)
+```
+
+#### Inference Flow (agent poll loop)
+
+```
+InferenceAgent.run() — polls every 5 seconds
+    │
+    ▼
+InferenceAgent.process() (src/agents/inference.py)
+    │ 1. store.find_recent_observations(limit=10)
+    │ 2. Filter out already-processed observation IDs
+    │ 3. For each new observation:
+    ▼
+InferenceAgent._infer(raw_content)
+    │ Claude API call with INFERENCE_PROMPT
+    │ Input:  "I prefer morning meetings"
+    │ Output: "User prefers morning meetings" (or "SKIP" if too vague)
+    │
+    ▼ (back in WorkerAgent.run)
+    │ memory.claim("User prefers morning meetings", source="inference_agent")
+    ▼
+MemoryService.claim() (src/interfaces.py)
+    │ 1. Gathers recent claims + observations as context
+    │ 2. llm.parse_claim(text, context) → ClaimData:
+    │      subject: "user", predicate: "prefers", object: "morning meetings"
+    │      confidence: 0.9, basis_descriptions: [...]
+    │ 3. store.create_node(claim_id, {type: "Claim", confidence: 0.9, ...})
+    │ 4. store.create_relationship(claim_id, "SUBJECT", entity_id)
+    │ 5. If basis found: store.create_relationship(claim_id, "BASIS", basis_id)
+    ▼
+Neo4j Graph (new):
+    (claim_123) --SUBJECT--> (entity_user)
+    (claim_123) --BASIS--> (obs_abc)
+```
+
+#### Contradiction Detection Flow
+
+```
+ValidatorAgent.run() — polls every 8 seconds
+    │
+    ▼
+ValidatorAgent.process() (src/agents/validator.py)
+    │ 1. store.find_recent_claims(limit=20)
+    │ 2. Group by subject_text, then by predicate_text
+    │ 3. Within each group, compare object_text values
+    │
+    │ Found: "user prefers morning meetings" vs "user prefers afternoon meetings"
+    │
+    ▼ (back in WorkerAgent.run)
+    │ memory.claim("the claim that user prefers 'morning meetings'
+    │              contradicts the claim that user prefers 'afternoon meetings'",
+    │              source="validator_agent")
+    ▼
+MemoryService.claim()
+    │ LLM parses → contradicts_description set
+    │ store.create_relationship(new_claim, "CONTRADICTS", old_claim)
+    ▼
+Neo4j Graph (new):
+    (claim_456) --CONTRADICTS--> (claim_123)
+```
+
+#### Remember Flow (query → resolved response)
+
+```
+User types: "?what are my meeting preferences?"
+    │
+    ▼
+CLI: memory.remember("what are my meeting preferences?")
+    │
+    ▼
+MemoryService.remember() (src/interfaces.py)
+    │ 1. llm.generate_query(text) → Cypher string
+    │ 2. store.raw_query(cypher) → results
+    │ 3. If empty: _broad_search() fallback (recent obs + claims)
+    │ 4. llm.synthesize_response(query, results) → natural language
+    │    - Prioritizes Resolution nodes over Claims
+    │    - Excludes superseded claims
+    │    - Notes unresolved contradictions
+    ▼
+User sees: "Your meeting preferences have evolved. Initially you
+           mentioned preferring mornings, but more recently indicated
+           you prefer afternoons. Current preference: afternoon meetings."
+```
+
+#### Concurrency Model
+
+```
+main.py: asyncio.gather(cli, inference_agent, validator_agent)
+
+    ┌─────────────────────────────────────────────────┐
+    │                  Event Loop                      │
+    │                                                  │
+    │  ┌──────────┐  ┌──────────────┐  ┌───────────┐  │
+    │  │   CLI    │  │  Inference   │  │ Validator  │  │
+    │  │  await   │  │   Agent     │  │   Agent    │  │
+    │  │  stdin   │  │  sleep(5s)  │  │  sleep(8s) │  │
+    │  └──┬───────┘  └──┬──────────┘  └──┬─────────┘  │
+    │     │             │               │              │
+    │     ▼             ▼               ▼              │
+    │  ┌──────────────────────────────────────────┐    │
+    │  │          MemoryService API               │    │
+    │  │    observe()  claim()  remember()        │    │
+    │  └──────────────────┬───────────────────────┘    │
+    │                     │                            │
+    │         ┌───────────┼───────────┐                │
+    │         ▼                       ▼                │
+    │  ┌────────────┐         ┌────────────┐           │
+    │  │  Claude    │         │   Neo4j    │           │
+    │  │  API (I/O) │         │   (I/O)   │           │
+    │  └────────────┘         └────────────┘           │
+    └─────────────────────────────────────────────────┘
+
+All three coroutines share one event loop.
+While one awaits I/O (Claude API, Neo4j, stdin), others run.
+No GIL contention — all bottlenecks are network I/O.
+```
+
+### 12.5 Implementation Phases
 
 1. **Infrastructure**: docker-compose (Neo4j 5.x), requirements.txt, pyproject.toml
 2. **Storage Layer**: `src/store.py` — Neo4j wrapper, CRUD, query methods
@@ -764,7 +918,7 @@ To swap agent frameworks later: wrap these methods as tools/functions for the ta
 6. **CLI + Entry Point**: `src/cli.py`, `main.py` — asyncio orchestration
 7. **Tests**: Unit + integration (meeting-preferences scenario)
 
-### 12.5 Implementation Status
+### 12.5 Implementation Status (v0.1)
 
 | Phase | Status | Notes |
 |-------|--------|-------|
@@ -782,12 +936,267 @@ To swap agent frameworks later: wrap these methods as tools/functions for the ta
 - **Virtual environment**: `.venv/` (created via `python3 -m venv .venv`)
 - **Dependencies**: installed via `pip install -e ".[dev]"`
 - **Neo4j**: Docker container via `docker compose up -d` (bolt://localhost:7687, auth: neo4j/memory-system)
-- **LLM**: Requires `ANTHROPIC_API_KEY` environment variable
+- **Redis**: Docker container via `docker compose up -d` (redis://localhost:6379)
+- **LLM**: Requires `ANTHROPIC_API_KEY` environment variable (via `.env` file or export)
 
-### 12.7 Open Items for Next Iteration
+---
 
-- [ ] Run full integration test against live Neo4j + Claude API
-- [ ] Add `.gitignore` and initialize git repo
+## 13. Distributed Architecture (v0.2)
+
+### 13.1 Motivation
+
+v0.1 ran everything in a single Python process via asyncio. While sufficient for prototyping, this has fundamental limitations:
+
+- **No true parallelism**: Python's GIL means asyncio is concurrent (I/O overlap) but not parallel
+- **No horizontal scaling**: Cannot run multiple inference agents across machines
+- **No fault isolation**: One agent crashing kills the entire process
+- **No independent deployment**: Cannot update agents without restarting the whole system
+
+v0.2 introduces a fully distributed architecture where each component runs as a separate process/container, communicating via HTTP API and Redis pub/sub.
+
+### 13.2 Architecture Diagram
+
+```
+                    ┌──────────────┐
+                    │   CLI / Web  │
+                    │   (client)   │
+                    └──────┬───────┘
+                           │ HTTP
+                           ▼
+┌──────────────────────────────────────────────┐
+│              FastAPI Server (api)             │
+│                                              │
+│  POST /v1/observe    GET /v1/observations    │
+│  POST /v1/claim      GET /v1/claims          │
+│  POST /v1/remember   GET /v1/contradictions  │
+│  POST /v1/infer      GET /v1/entities        │
+│  POST /v1/admin/clear  GET /v1/health        │
+│  GET  /v1/events/stream (SSE)                │
+│                                              │
+│  ┌────────────────┐  ┌───────────────────┐   │
+│  │ MemoryService  │  │  EventBus         │   │
+│  │ (store + llm)  │  │  (Redis publish)  │   │
+│  └───────┬────────┘  └────────┬──────────┘   │
+└──────────┼────────────────────┼──────────────┘
+           │                    │
+     ┌─────┼────────────────────┼─────┐
+     │     ▼                    ▼     │
+     │  ┌──────┐          ┌───────┐   │
+     │  │Neo4j │          │ Redis │   │
+     │  │      │          │       │   │
+     │  └──────┘          └───┬───┘   │
+     │                        │       │
+     └────────────────────────┼───────┘
+                              │ pub/sub
+              ┌───────────────┼───────────────┐
+              ▼               ▼               ▼
+        ┌───────────┐  ┌───────────┐   ┌───────────┐
+        │ Inference  │  │ Inference │   │ Validator  │
+        │ Agent (1)  │  │ Agent (2) │   │ Agent (1)  │
+        └───────────┘  └───────────┘   └───────────┘
+        (scalable via docker compose --scale)
+```
+
+### 13.3 Key Design Decisions
+
+| Decision | Choice | Rationale |
+|----------|--------|-----------|
+| Service boundary | HTTP API (FastAPI) | Language-agnostic, standard, debuggable with curl |
+| Event delivery | Redis pub/sub | Low-latency agent wakeup; polling fallback for missed events |
+| Agent state | Redis SETs | Operational state (processed IDs) belongs in Redis, not the knowledge graph |
+| Interface contract | `typing.Protocol` | `MemoryService` and `MemoryClient` have different constructors; structural typing avoids forced inheritance |
+| LLM centralization | `POST /v1/infer` on server | Agents don't need Anthropic SDK; API key stays server-side |
+| Distributed locks | Redis `SET NX EX` | Ensures exactly-once processing when scaling to N agents; TTL prevents deadlocks |
+| Backward compat | Dev mode preserved | `python main.py` still runs everything in-process without Redis |
+
+### 13.4 New Components
+
+#### MemoryAPI Protocol (`src/memory_protocol.py`)
+
+Shared interface contract satisfied by both `MemoryService` (in-process) and `MemoryClient` (HTTP):
+
+```python
+@runtime_checkable
+class MemoryAPI(Protocol):
+    async def observe(self, text: str, source: str) -> str: ...
+    async def claim(self, text: str, source: str) -> str: ...
+    async def remember(self, query: str) -> str: ...
+    async def get_recent_observations(self, limit: int = 10) -> list[dict]: ...
+    async def get_recent_claims(self, limit: int = 20) -> list[dict]: ...
+    async def get_unresolved_contradictions(self) -> list[tuple[dict, dict]]: ...
+    async def get_entities(self) -> list[dict]: ...
+    async def infer(self, observation_text: str) -> str | None: ...
+    async def clear(self) -> None: ...
+```
+
+#### EventBus (`src/events.py`)
+
+Redis pub/sub wrapper for inter-process notifications:
+
+- Channels: `memory:events:observation`, `memory:events:claim`
+- `publish_observation(obs_id)` / `publish_claim(claim_id)` — called by API after mutations
+- `listen()` — async iterator yielding events for agent consumption
+
+#### AgentState (`src/agent_state.py`)
+
+Redis-backed persistent state replacing in-memory Python sets:
+
+- `is_processed(key, member)` — `SISMEMBER` check
+- `mark_processed(key, member)` — `SADD` to tracking set
+- `try_acquire(key, instance_id, ttl)` — distributed lock via `SET NX EX`
+- `InMemoryAgentState` — fallback for dev mode without Redis
+
+#### HTTP API (`src/api.py`)
+
+FastAPI application wrapping MemoryService:
+
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `/v1/observe` | POST | Record observation |
+| `/v1/claim` | POST | Assert a claim |
+| `/v1/remember` | POST | Query resolved knowledge |
+| `/v1/infer` | POST | LLM inference (used by agents) |
+| `/v1/observations/recent` | GET | Recent observations |
+| `/v1/claims/recent` | GET | Recent claims |
+| `/v1/contradictions/unresolved` | GET | Unresolved contradictions |
+| `/v1/entities` | GET | All entities |
+| `/v1/admin/clear` | POST | Clear all data |
+| `/v1/health` | GET | Service health check |
+| `/v1/events/stream` | GET | SSE event stream |
+
+#### HTTP Client (`src/api_client.py`)
+
+`MemoryClient` — drop-in replacement for `MemoryService` when running out-of-process. Satisfies `MemoryAPI` protocol via `httpx.AsyncClient`.
+
+### 13.5 File Structure (v0.2)
+
+```
+agentic-memory/
+├── design_tracking.md
+├── docker-compose.yml              # Full stack: neo4j, redis, api, agents
+├── Dockerfile                      # Python 3.12-slim, installs [distributed]
+├── requirements.txt
+├── pyproject.toml                  # v0.2.0 with [distributed] optional deps
+├── .env.example
+├── .gitignore
+├── src/
+│   ├── __init__.py
+│   ├── store.py                    # Neo4j triple store wrapper
+│   ├── llm.py                      # Claude API translation (tool_use)
+│   ├── interfaces.py               # MemoryService + facade methods
+│   ├── memory_protocol.py          # MemoryAPI Protocol (shared contract)
+│   ├── api.py                      # FastAPI HTTP server
+│   ├── api_client.py               # MemoryClient (HTTP implementation)
+│   ├── events.py                   # Redis EventBus (pub/sub)
+│   ├── agent_state.py              # Redis AgentState + InMemoryAgentState
+│   ├── agents/
+│   │   ├── __init__.py
+│   │   ├── base.py                 # WorkerAgent ABC (event-driven + polling)
+│   │   ├── inference.py            # InferenceAgent
+│   │   └── validator.py            # ValidatorAgent
+│   └── cli.py                      # CLI chat adapter
+├── run_inference_agent.py           # Standalone agent entry point
+├── run_validator_agent.py           # Standalone agent entry point
+├── run_cli.py                       # Standalone CLI entry point
+├── main.py                          # Dev mode (in-process, all components)
+└── tests/
+    ├── __init__.py
+    ├── test_store.py
+    ├── test_llm.py
+    ├── test_interfaces.py
+    └── test_integration.py
+```
+
+### 13.6 Running Modes
+
+#### Dev Mode (single process, no Redis required)
+
+```bash
+docker compose up -d neo4j    # just the database
+python main.py                # runs API + agents + CLI in one process
+```
+
+Uses `InMemoryAgentState` as fallback. If `REDIS_URL` is set, uses Redis for state and events.
+
+#### Distributed Mode (multi-process)
+
+```bash
+docker compose up              # starts neo4j, redis, api, agents
+python run_cli.py              # or any HTTP client
+```
+
+Or manually:
+
+```bash
+docker compose up -d neo4j redis
+uvicorn src.api:app --port 8000       # terminal 1
+python run_inference_agent.py          # terminal 2
+python run_validator_agent.py          # terminal 3
+python run_cli.py                      # terminal 4
+```
+
+#### Scaled Mode
+
+```bash
+docker compose up --scale inference-agent=3
+```
+
+Multiple inference agents coordinate via Redis distributed locks — each observation is processed exactly once.
+
+### 13.7 Distributed Concurrency Model
+
+```
+┌──────────────────────────────────────────────────────┐
+│                   Docker Network                       │
+│                                                        │
+│  ┌─────────┐  ┌─────────┐  ┌─────────┐  ┌─────────┐  │
+│  │  API    │  │Inference│  │Inference│  │Validator│  │
+│  │ Server  │  │Agent #1 │  │Agent #2 │  │ Agent   │  │
+│  │ (pid 1) │  │ (pid 2) │  │ (pid 3) │  │ (pid 4) │  │
+│  └────┬────┘  └────┬────┘  └────┬────┘  └────┬────┘  │
+│       │            │            │            │        │
+│       ▼            ▼            ▼            ▼        │
+│  ┌──────────────────────────────────────────────┐     │
+│  │                  Redis                        │     │
+│  │  pub/sub: memory:events:{observation,claim}   │     │
+│  │  sets: agent:{name}:processed                 │     │
+│  │  locks: agent:{name}:lock:{item_id}           │     │
+│  └──────────────────────────────────────────────┘     │
+│       │                                               │
+│       ▼                                               │
+│  ┌──────────┐                                         │
+│  │  Neo4j   │  (only accessed by API server)          │
+│  └──────────┘                                         │
+└──────────────────────────────────────────────────────┘
+
+Event flow:
+1. CLI → POST /v1/observe → API writes to Neo4j
+2. API → Redis PUBLISH memory:events:observation
+3. Inference Agent #1 receives event, acquires lock (SET NX EX)
+4. Inference Agent #2 receives same event, lock fails → skips
+5. Agent #1 → POST /v1/infer → API calls Claude → returns claim text
+6. Agent #1 → POST /v1/claim → API writes to Neo4j
+7. API → Redis PUBLISH memory:events:claim
+8. Validator Agent receives claim event, checks for contradictions
+```
+
+### 13.8 Implementation Status (v0.2)
+
+| Phase | Status | Notes |
+|-------|--------|-------|
+| 1. MemoryAPI Protocol + Facades | Done | `src/memory_protocol.py`, facade methods in `src/interfaces.py` |
+| 2. Redis EventBus + AgentState | Done | `src/events.py`, `src/agent_state.py` |
+| 3. FastAPI HTTP Layer | Done | `src/api.py`, `src/api_client.py` |
+| 4. Standalone Entry Points | Done | `run_inference_agent.py`, `run_validator_agent.py`, `run_cli.py` |
+| 5. Containerize + Docs | Done | `Dockerfile`, `docker-compose.yml`, updated `CLAUDE.md` |
+
+### 13.9 Open Items
+
+- [ ] Create `tests/test_api.py` for HTTP endpoint tests
+- [ ] Update existing tests for protocol-based interfaces
+- [ ] Run full distributed integration test (docker compose up)
+- [ ] Scale test: verify exactly-once processing with multiple inference agents
+- [ ] SSE event stream testing
+- [ ] Add monitoring/observability (structured logging, health metrics)
 - [ ] Evaluate agent framework swappability (LangGraph, CrewAI, Claude Agent SDK)
-- [ ] Consider event-driven agent notifications (asyncio.Queue) instead of polling
-- [ ] HTTP API layer (FastAPI) for cross-process / cross-language access
+- [ ] Consider persistence/recovery strategies (what happens when agents restart mid-processing)
