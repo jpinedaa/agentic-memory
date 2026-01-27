@@ -1,0 +1,793 @@
+# Agentic Memory Management System
+
+## Design Document v0.1
+
+---
+
+## 1. Overview
+
+A shared memory substrate that multiple agents interact with as a service. The system provides a natural language interface for storing and retrieving knowledge, backed by a graph database that enables CRDT-style eventual consistency.
+
+### Core Principles
+
+- **Append-only**: No overwrites, no conflicts at write time
+- **Contradiction as data**: Conflicting claims coexist; tension is signal, not error
+- **Dumb storage, smart conventions**: The database stores triples with no enforced schema; meaning lives in conventions that agents agree on
+- **Natural language interface**: Agents interact via unstructured text; an LLM layer translates to/from structured triples
+
+---
+
+## 2. Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                       External World                            │
+│   ┌──────────┐   ┌──────────┐   ┌──────────┐   ┌──────────┐   │
+│   │   Chat   │   │  Robot   │   │ Document │   │   API    │   │
+│   │Interface │   │ Sensors  │   │  Loader  │   │  Feed    │   │
+│   └────┬─────┘   └────┬─────┘   └────┬─────┘   └────┬─────┘   │
+└────────┼──────────────┼──────────────┼──────────────┼──────────┘
+         │              │              │              │
+         ▼              ▼              ▼              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                  Observation Adapters                           │
+│              (modular, source-specific)                         │
+│                                                                 │
+│    observe("user said they hate morning meetings")              │
+│                                                                 │
+└────────────────────────────┬────────────────────────────────────┘
+                             │
+                             ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                                                                 │
+│                   Natural Language Interface                    │
+│                                                                 │
+│    observe(text)  →  LLM  →  triples                           │
+│    claim(text)    →  LLM  →  triples                           │
+│    remember(text) →  LLM  →  query → LLM → resolved response   │
+│                                                                 │
+└────────────────────────────┬────────────────────────────────────┘
+                             │
+                             ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                                                                 │
+│                    Triple Store (Neo4j)                         │
+│                                                                 │
+│                  (subject, predicate, object)                   │
+│                                                                 │
+│    No enforced schema. No special node types.                   │
+│    Just triples.                                                │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+                             ▲
+                             │
+┌────────────────────────────┴────────────────────────────────────┐
+│                                                                 │
+│                      Agent Population                           │
+│                                                                 │
+│    ┌─────────┐    ┌─────────┐    ┌─────────┐    ┌─────────┐   │
+│    │  Main   │    │ Insight │    │  Dedup  │    │Validator│   │
+│    │  Agent  │    │  Miner  │    │ Worker  │    │  Agent  │   │
+│    └─────────┘    └─────────┘    └─────────┘    └─────────┘   │
+│                                                                 │
+│    claim("user prefers afternoon meetings")                     │
+│    remember("what contradictions exist about user preferences") │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 3. Data Model
+
+### 3.1 The Triple
+
+The fundamental unit of storage:
+
+```
+(subject, predicate, object)
+```
+
+All three components are strings. The database assigns no special meaning to any value.
+
+### 3.2 Node Identity
+
+Nodes are identified by UUID strings. Generated at write time.
+
+```
+subject:   "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+predicate: "type"
+object:    "Claim"
+```
+
+### 3.3 Conventions (Not Schema)
+
+The database is schema-less. These are conventions that adapters and agents agree to follow:
+
+#### Node Types
+
+| Type | Created By | Meaning |
+|------|-----------|---------|
+| `Observation` | Adapters only | Raw perception from external world |
+| `Claim` | Agents only | Internal assertion or inference |
+| `Entity` | Either | A thing being described (user, object, concept) |
+| `Resolution` | Agents only | A claim that resolves contradicting claims |
+
+#### Reserved Predicates
+
+| Predicate | Domain | Range | Meaning |
+|-----------|--------|-------|---------|
+| `type` | Node | String | Node classification |
+| `source` | Node | String | Who/what created this node |
+| `timestamp` | Node | ISO8601 | When created |
+| `basis` | Claim | Node ID | Evidential link (what this is based on) |
+| `confidence` | Claim | Float 0-1 | Certainty score |
+| `supersedes` | Claim | Node ID | Replaces previous node |
+| `contradicts` | Claim | Node ID | In tension with another claim |
+| `raw_content` | Observation | String | Original unprocessed input |
+| `subject` | Claim/Obs | Node ID | What entity this is about |
+| `predicate` | Claim/Obs | String | Relationship or attribute |
+| `object` | Claim/Obs | String/Node ID | Value or target |
+
+#### Example: Observation
+
+```
+(obs_123, type, "Observation")
+(obs_123, source, "chat_interface")
+(obs_123, timestamp, "2024-01-28T10:30:00Z")
+(obs_123, raw_content, "user said: I hate early meetings")
+(obs_123, subject, entity_user_456)
+(obs_123, predicate, "expressed")
+(obs_123, object, "dislike of early meetings")
+```
+
+#### Example: Claim
+
+```
+(claim_789, type, "Claim")
+(claim_789, source, "inference_agent")
+(claim_789, timestamp, "2024-01-28T10:30:05Z")
+(claim_789, basis, obs_123)
+(claim_789, subject, entity_user_456)
+(claim_789, predicate, "prefers")
+(claim_789, object, "afternoon meetings")
+(claim_789, confidence, 0.8)
+```
+
+#### Example: Contradiction and Resolution
+
+```
+# Two conflicting claims exist
+(claim_789, predicate, "prefers")
+(claim_789, object, "afternoon meetings")
+(claim_789, confidence, 0.8)
+
+(claim_800, predicate, "prefers")
+(claim_800, object, "morning meetings")
+(claim_800, confidence, 0.6)
+
+# Agent notices contradiction
+(claim_810, type, "Claim")
+(claim_810, source, "validator_agent")
+(claim_810, basis, claim_789)
+(claim_810, basis, claim_800)
+(claim_810, predicate, "contradicts")
+(claim_810, subject, claim_789)
+(claim_810, object, claim_800)
+
+# Later, resolution agent resolves
+(resolution_820, type, "Resolution")
+(resolution_820, source, "resolution_agent")
+(resolution_820, basis, claim_789)
+(resolution_820, basis, claim_800)
+(resolution_820, supersedes, claim_800)
+(resolution_820, subject, entity_user_456)
+(resolution_820, predicate, "prefers")
+(resolution_820, object, "afternoon meetings")
+(resolution_820, confidence, 0.85)
+(resolution_820, reasoning, "claim_789 has higher confidence and more recent basis")
+```
+
+---
+
+## 4. Interface
+
+### 4.1 Design Principles
+
+- **Natural language in, natural language out**: Callers pass strings, receive strings
+- **LLM translation layer**: Converts between natural language and triples
+- **Implicit metadata**: Source and timestamp bound at interface creation, never passed explicitly
+- **Resolved reads**: `remember()` returns the current resolved state, handling contradictions
+
+### 4.2 Interface Binding
+
+Interfaces are created with a bound source identity:
+
+```python
+# Adapters create observation interfaces
+chat_observer = ObservationInterface(source="chat_interface")
+
+# Agents create claim interfaces
+inference_agent = AgentInterface(source="inference_agent")
+validator_agent = AgentInterface(source="validator_agent")
+```
+
+### 4.3 Methods
+
+#### observe(text: str) → None
+
+**Caller**: Observation adapters only
+
+**Purpose**: Record a perception from the external world
+
+**Behavior**:
+1. LLM extracts structured content (entities, relationships) from text
+2. Creates Observation node with:
+   - Auto-generated UUID
+   - source = bound source identity
+   - timestamp = now()
+   - raw_content = original text
+   - Extracted subject/predicate/object triples
+3. Writes triples to store
+
+**Example**:
+```python
+chat_observer.observe("user said they hate waking up early for meetings")
+```
+
+#### claim(text: str) → None
+
+**Caller**: Agents only
+
+**Purpose**: Assert an inference, fact, contradiction, or resolution
+
+**Behavior**:
+1. LLM parses the claim, identifies:
+   - What is being asserted
+   - What it's based on (searches for relevant nodes to link as basis)
+   - Confidence level (inferred from language or explicit)
+   - Whether it contradicts/supersedes existing claims
+2. Creates Claim node with appropriate triples
+3. Writes triples to store
+
+**Examples**:
+```python
+inference_agent.claim("based on their statement about early meetings, user prefers afternoon meetings")
+
+validator_agent.claim("the claim that user prefers morning meetings contradicts the claim that user prefers afternoon meetings")
+
+resolution_agent.claim("resolving the meeting preference conflict: user prefers afternoon meetings, superseding the morning claim due to higher confidence")
+```
+
+#### remember(query: str) → str
+
+**Caller**: Any (adapters, agents, external)
+
+**Purpose**: Retrieve resolved current state of knowledge
+
+**Behavior**:
+1. LLM translates query into graph query
+2. Executes query against store
+3. Gathers relevant nodes (observations, claims, resolutions)
+4. Resolves contradictions:
+   - Superseded claims are excluded
+   - Unresolved contradictions are noted
+   - Most confident/recent takes precedence where no explicit resolution
+5. LLM synthesizes natural language response from resolved data
+
+**Example**:
+```python
+response = memory.remember("what are the user's meeting preferences?")
+# Returns: "User prefers afternoon meetings (confidence: 0.85). 
+#          This was inferred from their statement about disliking early meetings."
+```
+
+---
+
+## 5. Concurrency Model
+
+### 5.1 CRDT-Style Semantics
+
+**No conflicts at write time.** Ever.
+
+- `observe()` appends a new Observation node
+- `claim()` appends a new Claim node
+- Both operations always succeed
+- Multiple agents writing simultaneously create multiple nodes
+
+**Contradictions are data, not errors.**
+
+When Agent A claims "user prefers morning" and Agent B claims "user prefers afternoon":
+- Both claims exist in the store
+- Neither overwrites the other
+- A downstream agent (or the resolution layer in `remember()`) reconciles
+
+### 5.2 Convergence
+
+Convergence happens at read time and/or via worker agents:
+
+**Read-time resolution** (`remember()`):
+- Follows `supersedes` links to exclude old claims
+- Weights by confidence and recency
+- Notes unresolved contradictions in response
+
+**Worker-agent resolution**:
+- Validator agent continuously monitors for contradictions
+- Resolution agent evaluates and creates Resolution nodes
+- These become the authoritative resolved state
+
+### 5.3 Write Ordering
+
+Within a single source, writes are ordered by timestamp.
+
+Across sources, no global ordering is guaranteed or required. Causality is captured through `basis` links, not timestamps.
+
+---
+
+## 6. Storage Layer
+
+### 6.1 Neo4j Implementation
+
+Neo4j is used as the triple store. While Neo4j has a property graph model (nodes with labels and properties, typed relationships), we use it in a minimal way:
+
+**Option A: Pure Triple Representation**
+```cypher
+// Every triple is a relationship between two nodes
+CREATE (s:Node {id: $subject})-[:TRIPLE {predicate: $predicate}]->(o:Node {id: $object})
+```
+
+**Option B: Property-Based for Literals**
+```cypher
+// Node with properties for literal values
+CREATE (n:Node {
+  id: $id,
+  type: "Claim",
+  source: "agent_a",
+  timestamp: datetime(),
+  confidence: 0.8
+})
+
+// Relationships for references to other nodes
+MATCH (n:Node {id: $claim_id}), (o:Node {id: $observation_id})
+CREATE (n)-[:BASIS]->(o)
+```
+
+**Recommendation**: Option B for prototype. Cleaner queries, better performance for property lookups.
+
+### 6.2 Core Queries
+
+```cypher
+// Get all triples about a node
+MATCH (n:Node {id: $id})-[r]->(target)
+RETURN n, r, target
+
+// Get all claims based on an observation
+MATCH (c:Node {type: "Claim"})-[:BASIS]->(o:Node {id: $obs_id})
+RETURN c
+
+// Get all unresolved contradictions
+MATCH (c1:Node {type: "Claim"})-[:CONTRADICTS]->(c2:Node {type: "Claim"})
+WHERE NOT EXISTS {
+  MATCH (r:Node {type: "Resolution"})-[:SUPERSEDES]->(c1)
+}
+AND NOT EXISTS {
+  MATCH (r:Node {type: "Resolution"})-[:SUPERSEDES]->(c2)
+}
+RETURN c1, c2
+
+// Get current resolved state for an entity
+MATCH (c:Node)-[:SUBJECT]->(e:Node {id: $entity_id})
+WHERE c.type IN ["Claim", "Resolution"]
+AND NOT EXISTS {
+  MATCH (newer:Node)-[:SUPERSEDES]->(c)
+}
+RETURN c
+ORDER BY c.confidence DESC, c.timestamp DESC
+```
+
+---
+
+## 7. LLM Translation Layer
+
+### 7.1 Responsibilities
+
+The LLM layer sits between the natural language interface and the triple store:
+
+```
+Natural Language  ←→  LLM Layer  ←→  Triples/Cypher
+```
+
+**For `observe()`**:
+- Extract entities mentioned
+- Identify relationships expressed
+- Preserve raw content
+- Generate appropriate triples
+
+**For `claim()`**:
+- Parse the assertion
+- Identify basis (may need to query store to find relevant nodes)
+- Detect supersession/contradiction language
+- Infer confidence from hedging language
+- Generate appropriate triples
+
+**For `remember()`**:
+- Translate query to Cypher
+- Execute and gather results
+- Apply resolution logic
+- Synthesize coherent natural language response
+
+### 7.2 Prompt Structure (Sketch)
+
+```
+System: You are a translation layer between natural language and a knowledge graph.
+
+For OBSERVE operations:
+- Input: raw observation text, source identifier
+- Output: JSON with extracted entities, relationships, and raw content
+- Preserve original wording in raw_content
+
+For CLAIM operations:
+- Input: claim text, source identifier, relevant context from store
+- Output: JSON with claim structure, basis links, confidence, contradiction/supersession flags
+
+For REMEMBER operations:
+- Input: query text, retrieved graph data
+- Output: natural language synthesis of resolved state
+```
+
+### 7.3 Example Translations
+
+**Observe**:
+```
+Input: "user said they hate waking up early for meetings"
+
+Output:
+{
+  "id": "obs_uuid_here",
+  "type": "Observation",
+  "raw_content": "user said they hate waking up early for meetings",
+  "extractions": [
+    {"subject": "user", "predicate": "expressed", "object": "dislike of early meetings"},
+    {"subject": "user", "predicate": "mentioned", "object": "meetings"}
+  ],
+  "entities": ["user"],
+  "sentiment": "negative",
+  "topics": ["meetings", "schedule", "morning"]
+}
+```
+
+**Claim**:
+```
+Input: "based on their statement about early meetings, user prefers afternoon meetings"
+Context: [obs_123 about hating early meetings]
+
+Output:
+{
+  "id": "claim_uuid_here",
+  "type": "Claim",
+  "basis": ["obs_123"],
+  "subject": "user",
+  "predicate": "prefers",
+  "object": "afternoon meetings",
+  "confidence": 0.8,
+  "supersedes": null,
+  "contradicts": null
+}
+```
+
+---
+
+## 8. Agent Architecture
+
+### 8.1 Agent Types
+
+**Observation Adapters** (not agents, but similar lifecycle):
+- Bound to external source
+- Can only call `observe()`
+- Examples: chat interface, document loader, API poller
+
+**Worker Agents** (run continuously):
+- Monitor store for patterns
+- Make claims based on analysis
+- Examples: deduplication, contradiction detection, insight mining
+
+**Task Agents** (triggered):
+- Invoked for specific tasks
+- May use `remember()` and `claim()`
+- Examples: question answering, summarization
+
+### 8.2 Agent Loop (Worker)
+
+```python
+class WorkerAgent:
+    def __init__(self, source_id: str, memory: AgentInterface):
+        self.source_id = source_id
+        self.memory = memory
+    
+    async def run(self):
+        while True:
+            # Check for relevant new content
+            context = self.memory.remember(self.watch_query())
+            
+            # Process and potentially make claims
+            if self.should_act(context):
+                claims = self.process(context)
+                for claim in claims:
+                    self.memory.claim(claim)
+            
+            await asyncio.sleep(self.poll_interval)
+    
+    def watch_query(self) -> str:
+        """What this agent monitors for"""
+        raise NotImplementedError
+    
+    def should_act(self, context: str) -> bool:
+        """Whether to process this context"""
+        raise NotImplementedError
+    
+    def process(self, context: str) -> list[str]:
+        """Generate claims from context"""
+        raise NotImplementedError
+```
+
+### 8.3 Example Agents
+
+**Contradiction Detector**:
+```python
+class ContradictionDetector(WorkerAgent):
+    def watch_query(self):
+        return "what recent claims exist that might contradict each other?"
+    
+    def should_act(self, context):
+        return "no contradictions" not in context.lower()
+    
+    def process(self, context):
+        # LLM analyzes context, identifies contradictions
+        # Returns claims like "claim X contradicts claim Y"
+        ...
+```
+
+**Insight Miner**:
+```python
+class InsightMiner(WorkerAgent):
+    def watch_query(self):
+        return "what patterns or insights can be derived from recent observations and claims?"
+    
+    def process(self, context):
+        # LLM identifies higher-order patterns
+        # Returns claims like "user consistently prefers X over Y"
+        ...
+```
+
+---
+
+## 9. Prototype Scope
+
+### 9.1 Components for v0.1
+
+1. **Neo4j container** (docker)
+2. **Triple store wrapper** (Python, basic CRUD)
+3. **LLM translation layer** (OpenAI/Anthropic API)
+4. **Natural language interface** (`observe`, `claim`, `remember`)
+5. **Chat adapter** (stdin/stdout or simple web interface)
+6. **Two worker agents**:
+   - Inference agent (observations → claims)
+   - Validator agent (detects contradictions)
+
+### 9.2 Test Scenario
+
+```
+Human → Chat Interface → observe("I prefer morning meetings")
+                                    ↓
+                              [stored as observation]
+                                    ↓
+        Inference Agent ← [monitors new observations]
+                                    ↓
+                         claim("user prefers morning meetings")
+                                    ↓
+Human → Chat Interface → observe("actually I hate mornings, afternoon is better")
+                                    ↓
+        Inference Agent → claim("user prefers afternoon meetings")
+                                    ↓
+        Validator Agent ← [monitors for contradictions]
+                                    ↓
+                         claim("morning preference contradicts afternoon preference")
+                                    ↓
+Human → Chat Interface → remember("what are my meeting preferences?")
+                                    ↓
+                         Response: "Your meeting preferences show some evolution.
+                                   Initially you mentioned preferring mornings, but
+                                   more recently indicated you prefer afternoons.
+                                   Current preference: afternoon meetings."
+```
+
+### 9.3 Not in v0.1
+
+- Authentication/authorization
+- Multi-tenancy
+- Persistence beyond Neo4j (backups, replication)
+- Advanced resolution strategies
+- Subscription/reactive notifications
+- Performance optimization
+- Production error handling
+
+---
+
+## 10. Open Questions
+
+### 10.1 For Prototype
+
+1. **LLM choice**: Claude API? GPT-4? Local model?
+2. **Agent orchestration**: Simple async loops? Task queue (Celery)?
+3. **Chat interface**: CLI? Basic web UI?
+
+### 10.2 For Later
+
+1. **Subscription model**: How do agents get notified of relevant changes without polling?
+2. **Confidence calibration**: Should confidence be normalized across agents?
+3. **Memory decay**: Do old, low-confidence claims eventually get pruned?
+4. **Scoping/namespacing**: Can there be isolated memory regions?
+5. **Access control**: Can certain claims be private to certain agents?
+
+---
+
+## 11. File Structure (Proposed)
+
+```
+memory-system/
+├── docker-compose.yml          # Neo4j container
+├── requirements.txt
+├── src/
+│   ├── __init__.py
+│   ├── store/
+│   │   ├── __init__.py
+│   │   ├── triple_store.py     # Neo4j wrapper
+│   │   └── queries.py          # Cypher query builders
+│   ├── interface/
+│   │   ├── __init__.py
+│   │   ├── base.py             # Interface base classes
+│   │   ├── observation.py      # ObservationInterface
+│   │   ├── agent.py            # AgentInterface
+│   │   └── memory.py           # remember() implementation
+│   ├── llm/
+│   │   ├── __init__.py
+│   │   ├── translator.py       # NL ↔ triples translation
+│   │   └── prompts.py          # Prompt templates
+│   ├── agents/
+│   │   ├── __init__.py
+│   │   ├── base.py             # WorkerAgent base class
+│   │   ├── inference.py        # InferenceAgent
+│   │   └── validator.py        # ValidatorAgent
+│   └── adapters/
+│       ├── __init__.py
+│       └── chat.py             # ChatAdapter
+├── tests/
+│   └── ...
+└── main.py                     # Entry point, orchestration
+```
+
+---
+
+## Appendix A: Glossary
+
+| Term | Definition |
+|------|------------|
+| **Triple** | (subject, predicate, object) - fundamental storage unit |
+| **Node** | An entity in the graph, identified by UUID |
+| **Observation** | A node representing external input; created by adapters |
+| **Claim** | A node representing an assertion; created by agents |
+| **Resolution** | A claim that resolves contradicting claims |
+| **Basis** | Link from a claim to what it's based on |
+| **Supersedes** | Link indicating one node replaces another |
+| **Adapter** | Component that translates external input to observations |
+| **Worker Agent** | Continuously running agent that monitors and processes |
+| **Convention** | Agreed-upon meaning for predicates/types; not enforced by DB |
+
+---
+
+## Appendix B: References
+
+- CRDT literature for convergence semantics
+- Knowledge graph patterns
+- Event sourcing / append-only architectures
+- LLM-based information extraction
+
+---
+
+*Document version: 0.3*
+*Last updated: 2026-01-27*
+*Status: v0.1 implementation complete, pending integration testing*
+
+---
+
+## 12. Implementation Plan
+
+### 12.1 Decisions
+
+| Decision | Choice | Rationale |
+|----------|--------|-----------|
+| LLM Provider | Anthropic Claude API | First-party SDK, consistent with system goals |
+| Chat Interface | CLI (stdin/stdout) | Fastest to prototype; sufficient for v0.1 |
+| Orchestration | asyncio I/O concurrency | Bottleneck is network I/O (API calls, Neo4j), not CPU. GIL irrelevant for awaited coroutines |
+| Agent Runtime | Framework-agnostic Python API | MemoryService is a clean API; any framework (LangGraph, CrewAI, Claude Agent SDK) can wrap it as tools later |
+| Service Boundary | In-process Python API | HTTP/REST can be layered on later without changing core |
+| File Structure | Flattened from design doc | Single-file modules for store, llm, interfaces; subdirectory only for agents |
+
+### 12.2 File Structure (Revised)
+
+```
+agentic-memory/
+├── design_tracking.md
+├── docker-compose.yml
+├── requirements.txt
+├── pyproject.toml
+├── src/
+│   ├── __init__.py
+│   ├── store.py                    # Neo4j triple store wrapper + queries
+│   ├── llm.py                      # Claude API translation layer + prompts
+│   ├── interfaces.py               # MemoryService (observe, claim, remember)
+│   ├── agents/
+│   │   ├── __init__.py
+│   │   ├── base.py                 # WorkerAgent ABC (asyncio loop)
+│   │   ├── inference.py            # InferenceAgent
+│   │   └── validator.py            # ValidatorAgent
+│   └── cli.py                      # CLI chat adapter
+├── tests/
+│   ├── __init__.py
+│   ├── test_store.py
+│   ├── test_llm.py
+│   ├── test_interfaces.py
+│   └── test_integration.py
+└── main.py
+```
+
+### 12.3 Core API Design
+
+```python
+class MemoryService:
+    """Framework-agnostic memory API. Agents are callers of this service."""
+
+    async def observe(self, text: str, source: str) -> str
+    async def claim(self, text: str, source: str) -> str
+    async def remember(self, query: str) -> str
+```
+
+To swap agent frameworks later: wrap these methods as tools/functions for the target framework. Core API unchanged.
+
+### 12.4 Implementation Phases
+
+1. **Infrastructure**: docker-compose (Neo4j 5.x), requirements.txt, pyproject.toml
+2. **Storage Layer**: `src/store.py` — Neo4j wrapper, CRUD, query methods
+3. **LLM Translation**: `src/llm.py` — Claude API, extraction/parsing/synthesis
+4. **Interfaces**: `src/interfaces.py` — MemoryService composing store + LLM
+5. **Agents**: `src/agents/` — WorkerAgent base, InferenceAgent, ValidatorAgent
+6. **CLI + Entry Point**: `src/cli.py`, `main.py` — asyncio orchestration
+7. **Tests**: Unit + integration (meeting-preferences scenario)
+
+### 12.5 Implementation Status
+
+| Phase | Status | Notes |
+|-------|--------|-------|
+| 1. Infrastructure | Done | docker-compose.yml, requirements.txt, pyproject.toml |
+| 2. Storage Layer | Done | `src/store.py` — async Neo4j wrapper, Option B (properties + relationships) |
+| 3. LLM Translation | Done | `src/llm.py` — Claude API with structured JSON extraction |
+| 4. Interfaces | Done | `src/interfaces.py` — MemoryService with observe/claim/remember |
+| 5. Agents | Done | Inference (observations→claims), Validator (contradiction detection) |
+| 6. CLI + Entry Point | Done | `src/cli.py` (? for queries, text for observations), `main.py` (asyncio.gather) |
+| 7. Tests | Done | test_store (10 tests), test_llm, test_interfaces, test_integration |
+
+### 12.6 Developer Environment
+
+- **Python**: 3.11+
+- **Virtual environment**: `.venv/` (created via `python3 -m venv .venv`)
+- **Dependencies**: installed via `pip install -e ".[dev]"`
+- **Neo4j**: Docker container via `docker compose up -d` (bolt://localhost:7687, auth: neo4j/memory-system)
+- **LLM**: Requires `ANTHROPIC_API_KEY` environment variable
+
+### 12.7 Open Items for Next Iteration
+
+- [ ] Run full integration test against live Neo4j + Claude API
+- [ ] Add `.gitignore` and initialize git repo
+- [ ] Evaluate agent framework swappability (LangGraph, CrewAI, Claude Agent SDK)
+- [ ] Consider event-driven agent notifications (asyncio.Queue) instead of polling
+- [ ] HTTP API layer (FastAPI) for cross-process / cross-language access

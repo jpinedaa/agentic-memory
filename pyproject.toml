@@ -1,0 +1,20 @@
+[project]
+name = "agentic-memory"
+version = "0.1.0"
+description = "A shared memory substrate for multiple agents, backed by a graph database"
+requires-python = ">=3.11"
+dependencies = [
+    "neo4j>=5.0,<6.0",
+    "anthropic>=0.40.0",
+    "python-dotenv>=1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
