@@ -15,19 +15,21 @@ dependencies = [
 [project.optional-dependencies]
 distributed = [
     "fastapi>=0.115",
-    "uvicorn>=0.30",
+    "uvicorn[standard]>=0.30",
     "httpx>=0.25",
     "redis[hiredis]>=5.0",
     "sse-starlette>=2.0",
+    "websockets>=12.0",
 ]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
     "fastapi>=0.115",
-    "uvicorn>=0.30",
+    "uvicorn[standard]>=0.30",
     "httpx>=0.25",
     "redis[hiredis]>=5.0",
     "sse-starlette>=2.0",
+    "websockets>=12.0",
 ]
 
 [tool.pytest.ini_options]
