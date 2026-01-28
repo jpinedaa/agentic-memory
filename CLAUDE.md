@@ -101,6 +101,24 @@ run_cli.py              → distributed CLI entry point
 
 ## Development
 
+**IMPORTANT: Always use the virtual environment or Docker for Python commands.**
+
+```bash
+# Activate venv before running any Python commands
+source .venv/bin/activate
+
+# Or use Docker for containerized execution
+docker compose exec api python ...
+```
+
+All `python`, `pytest`, `pip`, and other Python commands must be run either:
+1. Inside the activated `.venv` virtual environment, OR
+2. Inside a Docker container via `docker compose exec`
+
+Never run Python commands directly without the venv activated.
+
+---
+
 - Do not worry about backward compatibility unless explicitly stated. When making updates, also update relevant code, design docs (`docs/design_tracking.md`), and tests.
 - All external access goes through the `MemoryAPI` protocol. Never access `.store` or `.llm` directly from agents or CLI.
 - Agents must work with both `MemoryService` (in-process) and `MemoryClient` (HTTP). Use the protocol, not concrete types.
