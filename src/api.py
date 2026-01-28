@@ -21,6 +21,10 @@ from src.store import StoreConfig, TripleStore
 
 logger = logging.getLogger(__name__)
 
+# Suppress noisy Neo4j warnings about unknown labels/properties on empty databases
+logging.getLogger("neo4j.notifications").setLevel(logging.ERROR)
+logging.getLogger("neo4j").setLevel(logging.WARNING)
+
 
 # -- Request/Response models --
 
