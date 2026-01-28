@@ -118,6 +118,9 @@ async def lifespan(app: FastAPI):
     registry = AgentRegistry(redis_url=redis_url)
     ws_manager = WebSocketManager()
 
+    # Clean up dead agents from previous sessions
+    await registry.list_agents()
+
     # Wire up status updates to WebSocket broadcasting
     async def on_status_update(status: AgentStatus):
         await ws_manager.broadcast_agent_status(status.to_dict())

@@ -38,6 +38,7 @@ interface Props {
 export function AgentTopology({ maximized, onToggleMaximize }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
+  const zoomTransformRef = useRef<d3.ZoomTransform>(d3.zoomIdentity);
   const agents = useAgentStore((s) => Array.from(s.agents.values()));
   const [dimensions, setDimensions] = useState({ width: 0, height: 0 });
 
@@ -106,9 +107,15 @@ export function AgentTopology({ maximized, onToggleMaximize }: Props) {
     const zoom = d3.zoom<SVGSVGElement, unknown>()
       .scaleExtent([0.3, 5])
       .on('zoom', (event) => {
+        zoomTransformRef.current = event.transform;
         g.attr('transform', event.transform);
       });
     svg.call(zoom);
+
+    // Restore previous zoom transform
+    if (zoomTransformRef.current !== d3.zoomIdentity) {
+      svg.call(zoom.transform, zoomTransformRef.current);
+    }
 
     // Simulation
     const simulation = d3

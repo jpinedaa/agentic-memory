@@ -23,6 +23,7 @@ interface Props {
 export function GraphView({ maximized, onToggleMaximize }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
+  const zoomTransformRef = useRef<d3.ZoomTransform>(d3.zoomIdentity);
   const { nodes, setNodes } = useGraphStore();
   const [loading, setLoading] = useState(false);
   const [dimensions, setDimensions] = useState({ width: 0, height: 0 });
@@ -87,9 +88,15 @@ export function GraphView({ maximized, onToggleMaximize }: Props) {
     const zoom = d3.zoom<SVGSVGElement, unknown>()
       .scaleExtent([0.2, 4])
       .on('zoom', (event) => {
+        zoomTransformRef.current = event.transform;
         g.attr('transform', event.transform);
       });
     svg.call(zoom);
+
+    // Restore previous zoom transform
+    if (zoomTransformRef.current !== d3.zoomIdentity) {
+      svg.call(zoom.transform, zoomTransformRef.current);
+    }
 
     // Simulation nodes (copy to avoid mutating store)
     const simNodes: (GraphNode & d3.SimulationNodeDatum)[] = nodes.map((n) => ({ ...n }));

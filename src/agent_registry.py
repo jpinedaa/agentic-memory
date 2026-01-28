@@ -178,13 +178,27 @@ class AgentRegistry:
         self,
         agent_type: str | None = None,
         tag: str | None = None,
+        include_dead: bool = False,
     ) -> list[AgentStatus]:
-        """List all agents, optionally filtered by type or tag."""
+        """List all agents, optionally filtered by type or tag.
+
+        Dead agents are excluded by default and cleaned up from Redis.
+        """
         agents = []
+        dead_ids = []
         all_status = await self._redis.hgetall(KEY_STATUS)
 
         for agent_id, data in all_status.items():
             status = AgentStatus.from_dict(json.loads(data))
+
+            # Check if stale/dead
+            status = await self._check_liveness(status)
+
+            # Collect dead agents for cleanup
+            if status.status == "dead":
+                dead_ids.append(agent_id)
+                if not include_dead:
+                    continue
 
             # Filter by type
             if agent_type and status.agent_type != agent_type:
@@ -194,11 +208,21 @@ class AgentRegistry:
             if tag and tag not in status.tags:
                 continue
 
-            # Check if stale/dead
-            status = await self._check_liveness(status)
             agents.append(status)
 
+        # Clean up dead agents from Redis
+        if dead_ids:
+            await self._cleanup_dead(dead_ids)
+
         return agents
+
+    async def _cleanup_dead(self, agent_ids: list[str]) -> None:
+        """Remove dead agents from Redis."""
+        for agent_id in agent_ids:
+            await self._redis.hdel(KEY_STATUS, agent_id)
+            await self._redis.hdel(KEY_REGISTRY, agent_id)
+            await self._redis.srem(KEY_ACTIVE, agent_id)
+            logger.info(f"Cleaned up dead agent {agent_id}")
 
     async def _check_liveness(self, status: AgentStatus) -> AgentStatus:
         """Check if agent is stale or dead based on last heartbeat."""
