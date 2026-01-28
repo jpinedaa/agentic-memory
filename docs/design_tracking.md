@@ -1072,19 +1072,30 @@ FastAPI application wrapping MemoryService:
 
 ```
 agentic-memory/
-├── design_tracking.md
 ├── docker-compose.yml              # Full stack: neo4j, redis, api, agents
 ├── Dockerfile                      # Python 3.12-slim, installs [distributed]
 ├── requirements.txt
 ├── pyproject.toml                  # v0.2.0 with [distributed] optional deps
 ├── .env.example
 ├── .gitignore
+├── CLAUDE.md                       # Developer docs and project briefing
+├── docs/
+│   ├── design_tracking.md          # Full design document
+│   ├── graph_patterns.md           # Neo4j graph patterns
+│   ├── meta_language_exploration.md # LLM communication design
+│   └── test_tracking.md            # Test inventory and plans
+├── prompts/
+│   ├── shared/base.yaml            # Inherited constraints
+│   ├── llm_translator/             # Prompts for src/llm.py
+│   ├── inference_agent/            # Prompts for inference agent
+│   └── validator_agent/            # Prompts for validator agent
 ├── src/
 │   ├── __init__.py
 │   ├── store.py                    # Neo4j triple store wrapper
 │   ├── llm.py                      # Claude API translation (tool_use)
 │   ├── interfaces.py               # MemoryService + facade methods
 │   ├── memory_protocol.py          # MemoryAPI Protocol (shared contract)
+│   ├── prompts.py                  # Prompt template loader (YAML + Jinja2)
 │   ├── api.py                      # FastAPI HTTP server
 │   ├── api_client.py               # MemoryClient (HTTP implementation)
 │   ├── events.py                   # Redis EventBus (pub/sub)
@@ -1101,6 +1112,8 @@ agentic-memory/
 ├── main.py                          # Dev mode (in-process, all components)
 └── tests/
     ├── __init__.py
+    ├── conftest.py                 # Pytest config, fixtures, .env loading
+    ├── test_prompts.py             # Prompt template system tests
     ├── test_store.py
     ├── test_llm.py
     ├── test_interfaces.py

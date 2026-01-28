@@ -1,8 +1,16 @@
 # Agentic Memory System
 
+## Project Briefing
+
+This is a shared memory substrate where multiple AI agents interact via natural language, with a Neo4j graph database storing knowledge as triples (observations, claims, entities). The system evolved from a single-process prototype (v0.1) to a fully distributed architecture (v0.2) with FastAPI, Redis pub/sub, and containerized agents. Distributed mode is functional (`docker compose up`) and the core observe/claim/remember flow works.
+
+**Just completed:** Built a prompt template system — all LLM prompts moved from hardcoded strings to YAML files in `prompts/` with Jinja2 templating, Pydantic validation, and inheritance (`extends: shared/base`). Code updated in `src/llm.py` and `src/interfaces.py` to use `src/prompts.py` loader.
+
+**Next up:** Rebuild Docker containers and test end-to-end with the new prompt system. Then update tests for template changes. See `docs/meta_language_exploration.md` for prompt system design decisions.
+
 ## Project Overview
 
-A shared memory substrate where multiple agents interact via natural language, backed by a Neo4j graph database storing triples. See `design_tracking.md` for full design and architecture.
+A shared memory substrate where multiple agents interact via natural language, backed by a Neo4j graph database storing triples. See `docs/design_tracking.md` for full design and architecture.
 
 Core API: `MemoryAPI` protocol in `src/memory_protocol.py` — implemented by both `MemoryService` (in-process) and `MemoryClient` (HTTP).
 
@@ -93,7 +101,7 @@ run_cli.py              → distributed CLI entry point
 
 ## Development
 
-- Do not worry about backward compatibility unless explicitly stated. When making updates, also update relevant code, design docs (`design_tracking.md`), and tests.
+- Do not worry about backward compatibility unless explicitly stated. When making updates, also update relevant code, design docs (`docs/design_tracking.md`), and tests.
 - All external access goes through the `MemoryAPI` protocol. Never access `.store` or `.llm` directly from agents or CLI.
 - Agents must work with both `MemoryService` (in-process) and `MemoryClient` (HTTP). Use the protocol, not concrete types.
 - Agent state (`_processed_obs`, `_checked_pairs`) uses `AgentState` (Redis) or `InMemoryAgentState` (dev). Never use raw Python sets for tracking.
