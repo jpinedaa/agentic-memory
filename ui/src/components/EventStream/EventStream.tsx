@@ -85,16 +85,28 @@ function EventCard({ event }: { event: MemoryEvent }) {
   );
 }
 
-export function EventStream() {
+interface Props {
+  maximized?: boolean;
+  onToggleMaximize?: () => void;
+}
+
+export function EventStream({ maximized, onToggleMaximize }: Props) {
   const events = useEventStore((s) => s.events);
 
   return (
-    <div className="panel" style={{ flex: 1 }}>
+    <div className="panel">
       <div className="panel-header">
         <h2>Event Stream</h2>
-        <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
-          {events.length} event{events.length !== 1 ? 's' : ''}
-        </span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+            {events.length} event{events.length !== 1 ? 's' : ''}
+          </span>
+          {onToggleMaximize && (
+            <button className="panel-btn" onClick={onToggleMaximize} title={maximized ? 'Restore' : 'Maximize'}>
+              {maximized ? '\u2716' : '\u2922'}
+            </button>
+          )}
+        </div>
       </div>
       <div className="panel-body" style={{ padding: '0 var(--panel-padding)' }}>
         {events.length === 0 ? (
