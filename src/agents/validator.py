@@ -39,6 +39,7 @@ class ValidatorAgent(WorkerAgent):
             poll_interval=poll_interval,
             event_bus=event_bus,
             state=state,
+            agent_type="validator",
         )
 
     def event_channels(self) -> list[str]:

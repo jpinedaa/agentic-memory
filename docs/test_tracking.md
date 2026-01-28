@@ -127,6 +127,8 @@ pytest tests/test_store.py::test_create_and_get_node
 | Component | File | Priority | Notes |
 |-----------|------|----------|-------|
 | **API Endpoints** | `src/api.py` | HIGH | No `test_api.py` yet |
+| **Agent Registry** | `src/agent_registry.py` | HIGH | Registration, heartbeat, push rate config |
+| **WebSocket Manager** | `src/websocket_manager.py` | HIGH | Connection management, broadcasting |
 | **HTTP Client** | `src/api_client.py` | MEDIUM | Should test against mock/real API |
 | **EventBus** | `src/events.py` | MEDIUM | Redis pub/sub |
 | **AgentState** | `src/agent_state.py` | MEDIUM | Redis sets + distributed locks |
@@ -213,6 +215,56 @@ async def test_recent_claims():
 
 async def test_clear_endpoint():
     """POST /v1/admin/clear wipes database."""
+```
+
+## Test Plan: Agent Registry
+
+Priority tests to add for `src/agent_registry.py`:
+
+```python
+# tests/test_agent_registry.py
+
+async def test_register_agent():
+    """Register returns agent_id and push_interval."""
+
+async def test_deregister_agent():
+    """Deregistered agent no longer in list."""
+
+async def test_update_and_get_status():
+    """Status heartbeat stored and retrievable."""
+
+async def test_list_agents_filter_by_type():
+    """Filter agents by type."""
+
+async def test_list_agents_filter_by_tag():
+    """Filter agents by tag."""
+
+async def test_push_interval_resolution_order():
+    """agent > tag > type > default resolution."""
+
+async def test_stale_detection():
+    """Agent marked stale after 3x interval."""
+
+async def test_status_listener_callback():
+    """Listener called on status update."""
+```
+
+## Test Plan: WebSocket Manager
+
+```python
+# tests/test_websocket_manager.py
+
+async def test_connect_and_disconnect():
+    """Client connects and disconnects cleanly."""
+
+async def test_broadcast_to_subscribed():
+    """Message reaches subscribed clients."""
+
+async def test_channel_filter():
+    """Client only receives subscribed channels."""
+
+async def test_agent_type_filter():
+    """Client filters by agent type."""
 ```
 
 ---

@@ -4,9 +4,9 @@
 
 This is a shared memory substrate where multiple AI agents interact via natural language, with a Neo4j graph database storing knowledge as triples (observations, claims, entities). The system evolved from a single-process prototype (v0.1) to a fully distributed architecture (v0.2) with FastAPI, Redis pub/sub, and containerized agents. Distributed mode is functional (`docker compose up`) and the core observe/claim/remember flow works.
 
-**Just completed:** Built a prompt template system — all LLM prompts moved from hardcoded strings to YAML files in `prompts/` with Jinja2 templating, Pydantic validation, and inheritance (`extends: shared/base`). Code updated in `src/llm.py` and `src/interfaces.py` to use `src/prompts.py` loader.
+**Just completed:** Built agent status reporting + real-time visual UI system. Agents now register with the API, send heartbeat status (full metrics), with configurable push rates (per-agent, per-type, per-tag). WebSocket endpoint broadcasts updates to connected UI clients. React + D3.js dashboard with three panels: Agent Topology (force-directed graph), Event Stream (live events), and Knowledge Graph (Neo4j visualization). UI runs as separate Docker container on port 3000.
 
-**Next up:** Rebuild Docker containers and test end-to-end with the new prompt system. Then update tests for template changes. See `docs/meta_language_exploration.md` for prompt system design decisions.
+**Next up:** Test full stack end-to-end with `docker compose up` (includes new `ui` service). Add tests for `src/agent_registry.py` and `src/websocket_manager.py`. See `docs/agent_status_pattern.md` and `docs/visual_ui_design.md` for design decisions.
 
 ## Project Overview
 
@@ -87,6 +87,8 @@ src/events.py           → EventBus (Redis pub/sub)
 src/agent_state.py      → AgentState (Redis-backed sets + distributed locks)
 src/llm.py              → Claude API translation layer (tool_use)
 src/prompts.py          → Prompt template loader (YAML + Jinja2 + Pydantic)
+src/agent_registry.py   → Agent registration + status tracking (Redis)
+src/websocket_manager.py → WebSocket connection manager for UI
 src/store.py            → Neo4j async wrapper
 prompts/                → YAML prompt templates (organized by agent)
 src/cli.py              → stdin/stdout chat adapter
@@ -97,6 +99,7 @@ main.py                 → dev mode (in-process, asyncio.gather)
 run_inference_agent.py  → distributed inference agent entry point
 run_validator_agent.py  → distributed validator agent entry point
 run_cli.py              → distributed CLI entry point
+ui/                     → React + D3.js dashboard (separate container, port 3000)
 ```
 
 ## Development

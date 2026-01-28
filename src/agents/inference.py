@@ -40,8 +40,9 @@ class InferenceAgent(WorkerAgent):
             poll_interval=poll_interval,
             event_bus=event_bus,
             state=state,
+            agent_type="inference",
         )
-        self._started_at = datetime.now(timezone.utc).isoformat()
+        self._inference_started_at = datetime.now(timezone.utc).isoformat()
 
     def event_channels(self) -> list[str]:
         return [CHANNEL_OBSERVATION]
@@ -56,7 +57,7 @@ class InferenceAgent(WorkerAgent):
 
             # Skip observations from before this agent started (stale data)
             obs_ts = obs.get("timestamp", "")
-            if obs_ts and obs_ts < self._started_at:
+            if obs_ts and obs_ts < self._inference_started_at:
                 if self.state:
                     await self.state.mark_processed(STATE_KEY, obs_id)
                 continue

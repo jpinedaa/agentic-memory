@@ -77,6 +77,14 @@ services:
       redis:
         condition: service_healthy
 
+  ui:
+    build: ./ui
+    ports:
+      - "3000:3000"
+    depends_on:
+      api:
+        condition: service_healthy
+
 volumes:
   neo4j_data:
   redis_data:

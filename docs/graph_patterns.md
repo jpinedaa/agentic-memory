@@ -68,6 +68,30 @@ RETURN obs.raw_content, obs.source, obs.timestamp
 
 ---
 
+## 2. Agent Status Pattern (Redis, not Neo4j)
+
+**Purpose**: Track agent lifecycle, heartbeat status, and push rate configuration. Stored in Redis (not Neo4j) because it's ephemeral operational data.
+
+**Storage**:
+
+```
+agent:registry:{agent_id}   → JSON registration (persistent)
+agent:status:{agent_id}     → JSON status heartbeat
+agent:active                 → SET of active agent_ids
+agent:config:*               → Push rate configuration
+```
+
+**Resolution order** for push rates: per-agent > per-tag > per-type > global default.
+
+**Code references**:
+- `src/agent_registry.py` → `AgentRegistry`, `AgentStatus`
+- `src/agents/base.py` → `WorkerAgent._heartbeat_loop()`
+- `src/api.py` → `/v1/agents/*` endpoints
+
+See `docs/agent_status_pattern.md` for full design.
+
+---
+
 ## Suggested Future Patterns
 
 - **Claim-Basis Pattern**: How claims link to their evidential basis (observations or other claims)
@@ -77,5 +101,5 @@ RETURN obs.raw_content, obs.source, obs.timestamp
 
 ---
 
-*Document version: 0.1*
-*Last updated: 2026-01-27*
+*Document version: 0.2*
+*Last updated: 2026-01-28*
