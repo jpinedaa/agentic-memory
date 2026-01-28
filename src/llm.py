@@ -2,6 +2,7 @@
 
 Translates between natural language and structured graph operations.
 Uses tool_use for structured extraction to guarantee valid JSON.
+Prompts are loaded from YAML templates in prompts/ directory.
 """
 
 from __future__ import annotations
@@ -11,6 +12,14 @@ import logging
 from dataclasses import dataclass, field
 
 import anthropic
+
+from src.prompts import (
+    PromptLoader,
+    ObservationVars,
+    ClaimVars,
+    QueryGenerationVars,
+    SynthesisVars,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -113,75 +122,27 @@ CLAIM_TOOL = {
     },
 }
 
-OBSERVATION_SYSTEM = """\
-You are a knowledge extraction system. Given an observation text, extract structured data \
-by calling the record_observation tool.
-
-Rules:
-- Use lowercase for entity names
-- Predicates should be simple verbs or verb phrases
-- Keep objects concise
-- Extract ALL meaningful relationships from the text"""
-
-CLAIM_SYSTEM = """\
-You are a knowledge graph claim parser. Given a claim text and context about existing \
-knowledge, parse the claim by calling the record_claim tool.
-
-Infer confidence from language: hedging = lower, definitive = higher."""
-
-QUERY_GENERATION_PROMPT = """\
-You are a knowledge graph query translator. Given a natural language question, generate a Cypher query to find relevant information in a Neo4j graph.
-
-The graph has nodes with label :Node and these property conventions:
-- id: UUID string
-- type: "Observation", "Claim", "Resolution", or "Entity"
-- source: who created this node
-- timestamp: ISO8601 datetime string
-- raw_content: original text (on Observations)
-- name: entity name (on Entity nodes)
-- confidence: float 0-1 (on Claims)
-- subject_text, predicate_text, object_text: extracted relationship components
-
-Relationships:
-- SUBJECT: from Claim/Observation to Entity
-- BASIS: from Claim to what it's based on
-- SUPERSEDES: from newer Claim to older one it replaces
-- CONTRADICTS: between conflicting Claims
-
-Return ONLY a valid Cypher query string. No explanation, no markdown, no code fences.
-
-Question: {query}"""
-
-SYNTHESIS_PROMPT = """\
-You are a knowledge synthesis system. Given a question and graph data retrieved from a knowledge store, produce a clear natural language answer.
-
-Rules:
-- Prioritize Resolution nodes over raw Claims
-- Note when claims have been superseded
-- Mention confidence levels when relevant
-- If there are unresolved contradictions, mention them
-- If no relevant data exists, say so clearly
-- Be concise but complete
-
-Question: {query}
-
-Retrieved data:
-{results}"""
-
-
 class LLMTranslator:
-    """Translates between natural language and graph structures using Claude."""
+    """Translates between natural language and graph structures using Claude.
+
+    Prompts are loaded from YAML templates in the prompts/ directory.
+    """
 
     def __init__(self, api_key: str | None = None, model: str = "claude-sonnet-4-20250514") -> None:
         self._client = anthropic.AsyncAnthropic(api_key=api_key)
         self._model = model
+        self._prompt_loader = PromptLoader()
 
     async def extract_observation(self, text: str) -> ObservationData:
         """Extract structured data from observation text using tool_use."""
+        prompt = self._prompt_loader.load("llm_translator/observation")
+        vars = ObservationVars(observation_text=text)
+        rendered = prompt.render(vars)
+
         response = await self._client.messages.create(
             model=self._model,
             max_tokens=1024,
-            system=OBSERVATION_SYSTEM,
+            system=rendered["system"] or "",
             messages=[
                 {"role": "user", "content": f"Extract structured data from this observation:\n\n{text}"}
             ],
@@ -199,18 +160,18 @@ class LLMTranslator:
         self, text: str, context: list[dict] | None = None
     ) -> ClaimData:
         """Parse a claim text into structured data using tool_use."""
-        context_str = json.dumps(context, indent=2, default=str) if context else "No existing context."
+        prompt = self._prompt_loader.load("llm_translator/claim")
+        vars = ClaimVars(claim_text=text, context=context or [])
+        rendered = prompt.render(vars)
+
         response = await self._client.messages.create(
             model=self._model,
             max_tokens=1024,
-            system=CLAIM_SYSTEM,
+            system=rendered["system"] or "",
             messages=[
                 {
                     "role": "user",
-                    "content": (
-                        f"Context about existing knowledge:\n{context_str}\n\n"
-                        f"Claim text to parse:\n{text}"
-                    ),
+                    "content": rendered["user"] or f"Parse this claim:\n{text}",
                 }
             ],
             tools=[CLAIM_TOOL],
@@ -229,11 +190,15 @@ class LLMTranslator:
 
     async def generate_query(self, text: str) -> str:
         """Translate a natural language question into a Cypher query."""
-        prompt = QUERY_GENERATION_PROMPT.format(query=text)
+        prompt = self._prompt_loader.load("llm_translator/query_generation")
+        vars = QueryGenerationVars(query=text)
+        rendered = prompt.render(vars)
+
         response = await self._client.messages.create(
             model=self._model,
             max_tokens=512,
-            messages=[{"role": "user", "content": prompt}],
+            system=rendered["system"] or "",
+            messages=[{"role": "user", "content": rendered["user"] or ""}],
         )
         cypher = self._extract_text(response).strip()
         # Strip any markdown fencing the model might add
@@ -247,13 +212,15 @@ class LLMTranslator:
         self, query: str, results: list[dict]
     ) -> str:
         """Turn graph query results into a natural language response."""
-        prompt = SYNTHESIS_PROMPT.format(
-            query=query, results=json.dumps(results, indent=2, default=str)
-        )
+        prompt = self._prompt_loader.load("llm_translator/synthesis")
+        vars = SynthesisVars(query=query, results=results)
+        rendered = prompt.render(vars)
+
         response = await self._client.messages.create(
             model=self._model,
             max_tokens=1024,
-            messages=[{"role": "user", "content": prompt}],
+            system=rendered["system"] or "",
+            messages=[{"role": "user", "content": rendered["user"] or ""}],
         )
         return self._extract_text(response)
 

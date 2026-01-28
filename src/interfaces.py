@@ -12,21 +12,10 @@ from datetime import datetime, timezone
 from typing import Any
 
 from src.llm import LLMTranslator
+from src.prompts import PromptLoader, InferenceVars
 from src.store import TripleStore
 
 logger = logging.getLogger(__name__)
-
-INFERENCE_PROMPT = """\
-You are an inference agent for a knowledge system. Given an observation (something \
-a user said or did), produce a concise factual claim that can be stored in a knowledge graph.
-
-Rules:
-- State the inference as a direct factual claim (e.g. "user prefers afternoon meetings")
-- Do NOT repeat the observation verbatim — infer the underlying fact or preference
-- Keep it to one sentence
-- If the observation is too vague or meaningless to infer anything from, respond with exactly: SKIP
-
-Observation: {observation}"""
 
 
 def _new_id() -> str:
@@ -47,6 +36,7 @@ class MemoryService:
     def __init__(self, store: TripleStore, llm: LLMTranslator) -> None:
         self.store = store
         self.llm = llm
+        self._prompt_loader = PromptLoader()
 
     async def observe(self, text: str, source: str) -> str:
         """Record an observation from the external world.
@@ -246,11 +236,15 @@ class MemoryService:
 
     async def infer(self, observation_text: str) -> str | None:
         """Use the LLM to produce an inference claim from an observation."""
-        prompt = INFERENCE_PROMPT.format(observation=observation_text)
+        prompt = self._prompt_loader.load("inference_agent/infer")
+        vars = InferenceVars(observation_text=observation_text)
+        rendered = prompt.render(vars)
+
         response = await self.llm._client.messages.create(
             model=self.llm._model,
             max_tokens=256,
-            messages=[{"role": "user", "content": prompt}],
+            system=rendered["system"] or "",
+            messages=[{"role": "user", "content": rendered["user"] or ""}],
         )
         text = ""
         for block in response.content:

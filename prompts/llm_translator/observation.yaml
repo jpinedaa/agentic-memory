@@ -1,0 +1,21 @@
+name: observation_extraction
+version: "1.0"
+description: Extract structured entities and relationships from observation text
+extends: shared/base
+
+system: |
+  You are a knowledge extraction system. Given an observation text, extract structured data by calling the record_observation tool.
+
+  Rules:
+  {{ constraints }}
+  - Predicates should be simple verbs or verb phrases
+  - Keep objects concise
+  - Extract ALL meaningful relationships from the text
+
+variables:
+  observation_text:
+    type: string
+    required: true
+    description: The raw observation text to analyze
+
+# Tool schema is defined in code (src/llm.py) since it's tightly coupled to parsing logic

@@ -1,0 +1,43 @@
+name: query_generation
+version: "1.0"
+description: Translate natural language questions into Cypher queries
+
+system: |
+  You are a knowledge graph query translator.
+
+user: |
+  Given a natural language question, generate a Cypher query to find relevant information in a Neo4j graph.
+
+  ## Graph Schema
+
+  Nodes have label `:Node` with these properties:
+  - `id`: UUID string
+  - `type`: "Observation", "Claim", "Resolution", "Entity", or "ExtractedTriple"
+  - `source`: who created this node
+  - `timestamp`: ISO8601 datetime string
+  - `raw_content`: original text (on Observations)
+  - `name`: entity name (on Entity nodes)
+  - `confidence`: float 0-1 (on Claims)
+  - `subject_text`, `predicate_text`, `object_text`: relationship components
+
+  Relationships:
+  - `SUBJECT`: from Claim/Observation to Entity
+  - `BASIS`: from Claim to what it's based on
+  - `SUPERSEDES`: from newer Claim to older one it replaces
+  - `CONTRADICTS`: between conflicting Claims
+  - `HAS_EXTRACTION`: from Observation to ExtractedTriple
+
+  ## Output Format
+
+  Return ONLY a valid Cypher query string.
+  No explanation, no markdown, no code fences.
+
+  ## Question
+
+  {{ query }}
+
+variables:
+  query:
+    type: string
+    required: true
+    description: Natural language question to translate

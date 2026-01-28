@@ -1,0 +1,35 @@
+name: claim_parsing
+version: "1.0"
+description: Parse claim text into structured knowledge graph format
+extends: shared/base
+
+system: |
+  You are a knowledge graph claim parser. Given a claim text and context about existing knowledge, parse the claim by calling the record_claim tool.
+
+  Confidence guidelines:
+  - Hedging language ("maybe", "I think", "possibly") = lower confidence (0.5-0.7)
+  - Definitive statements ("is", "definitely", "always") = higher confidence (0.8-0.95)
+  - Direct observations = highest confidence (0.9-1.0)
+
+  {{ constraints }}
+
+user: |
+  Parse this claim:
+  "{{ claim_text }}"
+
+  {% if context %}
+  Context (existing knowledge):
+  {% for item in context %}
+  - [{{ item.node_kind }}] {{ item.get('raw_content') or item.get('subject_text', '') + ' ' + item.get('predicate_text', '') + ' ' + item.get('object_text', '') }}
+  {% endfor %}
+  {% endif %}
+
+variables:
+  claim_text:
+    type: string
+    required: true
+    description: The claim text to parse
+  context:
+    type: array
+    required: false
+    description: Recent claims and observations for linking basis

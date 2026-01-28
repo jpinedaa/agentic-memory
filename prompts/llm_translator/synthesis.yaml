@@ -1,0 +1,40 @@
+name: synthesis
+version: "1.0"
+description: Synthesize natural language response from graph query results
+extends: shared/base
+
+system: |
+  You are a knowledge synthesis system.
+
+user: |
+  Given a question and graph data retrieved from a knowledge store, produce a clear natural language answer.
+
+  ## Rules
+  - Prioritize Resolution nodes over raw Claims (resolutions are authoritative)
+  - Note when claims have been superseded
+  - Mention confidence levels when relevant (e.g., "likely" for 0.7, "confident" for 0.9)
+  - If there are unresolved contradictions, mention them
+  - If no relevant data exists, say so clearly
+  {{ output_guidance }}
+
+  ## Question
+  {{ query }}
+
+  ## Retrieved Data
+  {% if results %}
+  {% for item in results %}
+  {{ item }}
+  {% endfor %}
+  {% else %}
+  No data found.
+  {% endif %}
+
+variables:
+  query:
+    type: string
+    required: true
+    description: The original question
+  results:
+    type: array
+    required: false
+    description: Graph data retrieved from query

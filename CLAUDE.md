@@ -78,7 +78,9 @@ src/api_client.py       → MemoryClient (HTTP implementation)
 src/events.py           → EventBus (Redis pub/sub)
 src/agent_state.py      → AgentState (Redis-backed sets + distributed locks)
 src/llm.py              → Claude API translation layer (tool_use)
+src/prompts.py          → Prompt template loader (YAML + Jinja2 + Pydantic)
 src/store.py            → Neo4j async wrapper
+prompts/                → YAML prompt templates (organized by agent)
 src/cli.py              → stdin/stdout chat adapter
 src/agents/base.py      → WorkerAgent ABC (event-driven + poll fallback)
 src/agents/inference.py → observations → claims
@@ -97,3 +99,31 @@ run_cli.py              → distributed CLI entry point
 - Agent state (`_processed_obs`, `_checked_pairs`) uses `AgentState` (Redis) or `InMemoryAgentState` (dev). Never use raw Python sets for tracking.
 - All store and interface methods are async.
 - Tests marked `@pytest.mark.llm` require a live Claude API key. Store tests only need Neo4j.
+
+## Prompt System
+
+Prompts are in `prompts/` directory as YAML files with Jinja2 templating and Pydantic validation.
+
+```
+prompts/
+├── shared/base.yaml           # Shared constraints (inherited)
+├── llm_translator/            # Prompts for src/llm.py
+├── inference_agent/           # Prompts for inference agent
+└── validator_agent/           # Prompts for validator agent
+```
+
+Usage:
+```python
+from src.prompts import PromptLoader, InferenceVars
+
+loader = PromptLoader()
+prompt = loader.load("inference_agent/infer")
+rendered = prompt.render(InferenceVars(observation_text="..."))
+# rendered["system"], rendered["user"]
+```
+
+Features:
+- **Inheritance**: `extends: shared/base` injects shared constraints
+- **Jinja2**: `{% if include_reasoning %}...{% endif %}` for conditionals
+- **Pydantic**: Type-checked variables (`InferenceVars`, `ClaimVars`, etc.)
+- **Versioning**: Each prompt has `version` metadata

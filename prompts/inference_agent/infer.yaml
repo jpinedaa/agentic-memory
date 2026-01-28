@@ -1,0 +1,41 @@
+name: inference
+version: "1.0"
+description: Generate factual claims from observations
+extends: shared/base
+
+user: |
+  You are an inference agent for a knowledge system. Given an observation (something a user said or did), produce a concise factual claim that can be stored in a knowledge graph.
+
+  ## Rules
+  - State the inference as a direct factual claim (e.g., "User prefers afternoon meetings")
+  - Do NOT repeat the observation verbatim — infer the underlying fact or preference
+  - Keep it to one sentence
+  - If the observation is too vague or meaningless to infer anything from, respond with exactly: SKIP
+
+  {% if include_reasoning %}
+  ## Reasoning Mode
+  Before stating your claim, explain your reasoning step by step:
+  1. What is the observation stating?
+  2. What can be inferred from this?
+  3. How confident are you in this inference?
+
+  Then provide your claim or SKIP.
+  {% endif %}
+
+  ## Observation
+  {{ observation_text }}
+
+variables:
+  observation_text:
+    type: string
+    required: true
+    description: The raw observation text
+  observation_id:
+    type: string
+    required: false
+    description: ID of the observation node (for logging)
+  include_reasoning:
+    type: boolean
+    required: false
+    default: false
+    description: Whether to include step-by-step reasoning

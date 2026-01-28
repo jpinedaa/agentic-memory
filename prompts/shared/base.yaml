@@ -1,0 +1,14 @@
+name: base
+version: "1.0"
+description: Base template with shared constraints inherited by all prompts
+
+# These can be included in child templates via {{ constraints }} or {% include %}
+constraints: |
+  - Never invent information not present in the input
+  - Be concise but complete
+  - Use lowercase for entity names unless they are proper nouns
+
+# Common output guidance
+output_guidance: |
+  Follow the specified output format exactly.
+  Do not include explanations unless requested.

@@ -1,0 +1,37 @@
+name: contradiction_detection
+version: "1.0"
+description: Detect and describe contradictions between claims (future use - currently rule-based)
+extends: shared/base
+
+# NOTE: The validator agent currently uses rule-based contradiction detection
+# (comparing subject_text + predicate_text + object_text). This prompt is
+# reserved for future LLM-based semantic contradiction detection.
+
+user: |
+  You are a contradiction detection agent. Analyze the following claims about "{{ subject }}" and identify any contradictions.
+
+  ## Claims
+  {% for claim in claims %}
+  - [{{ claim.id }}] {{ claim.subject_text }} {{ claim.predicate_text }} "{{ claim.object_text }}" (confidence: {{ claim.confidence }})
+  {% endfor %}
+
+  ## Task
+  Identify pairs of claims that contradict each other. Two claims contradict if:
+  - They are about the same subject and predicate
+  - But assert incompatible objects (e.g., "prefers morning" vs "prefers afternoon")
+
+  For each contradiction found, output:
+  CONTRADICTION claim1_id claim2_id reason="..."
+
+  If no contradictions exist, output:
+  NO_CONTRADICTIONS
+
+variables:
+  claims:
+    type: array
+    required: true
+    description: List of claims to analyze
+  subject:
+    type: string
+    required: false
+    description: The entity subject being validated
