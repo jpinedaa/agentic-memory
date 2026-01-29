@@ -63,6 +63,7 @@ async def main() -> None:
     store_node.register_service("memory", memory_service)
     store_node.register_service("store", store)
     store_node.register_service("llm", llm)
+    store_node.transport_server.mount_ui_bridge(store)
     await store_node.start()
 
     bootstrap = ["http://127.0.0.1:9000"]

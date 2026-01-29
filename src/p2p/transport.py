@@ -72,6 +72,12 @@ class TransportServer:
                 self._inbound_ws.pop(peer_id, None)
             logger.debug("WebSocket connection error", exc_info=True)
 
+    def mount_ui_bridge(self, store: Any) -> None:
+        """Mount the /v1/ UI bridge endpoints on this node's FastAPI app."""
+        from src.p2p.ui_bridge import create_ui_bridge
+        router = create_ui_bridge(self.node, store)
+        self.app.include_router(router)
+
     async def _health(self) -> dict[str, Any]:
         return {
             "status": "ok",

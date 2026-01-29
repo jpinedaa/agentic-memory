@@ -129,6 +129,12 @@ async def main() -> None:
     if Capability.STORE in capabilities or Capability.LLM in capabilities:
         await _setup_memory_service(node, capabilities)
 
+    # Mount UI bridge on store nodes (must happen before start)
+    if Capability.STORE in capabilities:
+        store_service = node.get_service("store")
+        if store_service:
+            node.transport_server.mount_ui_bridge(store_service)
+
     # Start the node
     await node.start()
 

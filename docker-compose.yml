@@ -56,6 +56,19 @@ services:
       store-node:
         condition: service_healthy
 
+  cli-node:
+    build: .
+    command: python run_node.py --capabilities cli --port 9000 --host 0.0.0.0 --bootstrap http://store-node:9000
+    environment:
+      ADVERTISE_HOST: cli-node
+    stdin_open: true
+    tty: true
+    depends_on:
+      store-node:
+        condition: service_healthy
+    profiles:
+      - cli
+
   ui:
     build: ./ui
     ports:
