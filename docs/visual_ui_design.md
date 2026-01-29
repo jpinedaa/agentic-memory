@@ -271,5 +271,5 @@ The knowledge graph SVG is always rendered (not conditionally gated on `nodes.le
 
 ---
 
-*Document version: 0.2*
-*Last updated: 2026-01-28*
+*Document version: 0.3*
+*Last updated: 2026-01-29*

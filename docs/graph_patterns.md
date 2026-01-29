@@ -95,6 +95,23 @@ See `docs/agent_status_pattern.md` for full design.
 
 ---
 
+## 3. UI Visualization
+
+The knowledge graph is rendered in the React UI's GraphView panel using D3.js. Node types are color-coded:
+
+| Node Type | Color | D3 Radius |
+|-----------|-------|-----------|
+| Entity | Blue (`#58a6ff`) | 8 |
+| Observation | Gray (`#8b949e`) | 6 |
+| Claim | Green (`#3fb950`) | 7 |
+| ExtractedTriple | Yellow (`#d29922`) | 5 |
+
+Edges are rendered with relationship type labels. The SVG element is always mounted (not conditionally rendered) to prevent D3 initialization issues.
+
+Data is fetched via `GET /v1/graph/nodes?limit=200` which queries Neo4j through the UI bridge on the store node.
+
+---
+
 ## Suggested Future Patterns
 
 - **Claim-Basis Pattern**: How claims link to their evidential basis (observations or other claims)
@@ -104,5 +121,5 @@ See `docs/agent_status_pattern.md` for full design.
 
 ---
 
-*Document version: 0.2*
-*Last updated: 2026-01-28*
+*Document version: 0.3*
+*Last updated: 2026-01-29*

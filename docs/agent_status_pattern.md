@@ -123,6 +123,18 @@ Dead peers are skipped by `RoutingTable.route_method()` and their WebSocket conn
 - Neighbors detect missing heartbeats via health check loop
 - After 30s of silence, node is marked dead and removed
 
+### Auto-Reconnect
+
+When all peers die (e.g. Docker containers restart), the health check loop detects an empty routing table and re-bootstraps from the original seed URLs:
+
+```python
+if self.routing.peer_count == 0 and self.bootstrap_peers:
+    for peer_url in self.bootstrap_peers:
+        peers = await self._join_peer(peer_url)
+        for ps in peers:
+            self.routing.update_peer(ps)
+```
+
 ---
 
 ## Comparison with v0.2
@@ -138,15 +150,28 @@ Dead peers are skipped by `RoutingTable.route_method()` and their WebSocket conn
 
 ---
 
+## Cross-Network URL Remapping
+
+When a node bootstraps from a URL that differs from the peer's advertised address (e.g. CLI on host connecting to Docker container), the node saves URL overrides:
+
+- `_url_overrides` dict maps `node_id → (http_url, ws_url)`
+- Applied during bootstrap (`_join_peer()`) and after gossip merge (`handle_gossip()`)
+- Uses `dataclasses.replace()` since `PeerInfo` is `@dataclass(frozen=True)`
+
+This ensures the CLI can reach Docker containers via `localhost` even though they advertise Docker-internal hostnames.
+
+---
+
 ## Code References
 
 - `src/p2p/types.py` — `PeerInfo`, `PeerState`, `Capability`
-- `src/p2p/gossip.py` — `GossipProtocol` (heartbeat + gossip loop)
+- `src/p2p/gossip.py` — `GossipProtocol` (heartbeat + gossip loop + URL override re-application)
 - `src/p2p/routing.py` — `RoutingTable` (peer tracking + capability routing)
-- `src/p2p/node.py` — `PeerNode` (health check loop, neighbor management)
+- `src/p2p/node.py` — `PeerNode` (health check loop, neighbor management, URL remapping, auto-reconnect)
+- `src/p2p/ui_bridge.py` — UI bridge (translates PeerState → AgentStatus for React UI)
 - `src/agents/base.py` — `WorkerAgent` (event-driven wakeup via `asyncio.Event`)
 
 ---
 
-*Document version: 0.2*
-*Last updated: 2026-01-28*
+*Document version: 0.3*
+*Last updated: 2026-01-29*
