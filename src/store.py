@@ -203,6 +203,19 @@ class TripleStore:
         await self.create_node(node_id, {"type": "Entity", "name": name})
         return node_id
 
+    async def get_all_relationships(
+        self, limit: int = 500
+    ) -> list[dict[str, Any]]:
+        """Get all relationships for graph visualization."""
+        query = """
+            MATCH (a:Node)-[r]->(b:Node)
+            RETURN a.id AS source, b.id AS target, type(r) AS type
+            LIMIT $limit
+        """
+        async with self._driver.session() as session:
+            result = await session.run(query, limit=limit)
+            return [dict(record) async for record in result]
+
     async def raw_query(
         self, cypher: str, params: dict[str, Any] | None = None
     ) -> list[dict[str, Any]]:

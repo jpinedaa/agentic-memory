@@ -10,7 +10,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import sys
-from typing import TYPE_CHECKING
+from typing import Any, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from src.memory_protocol import MemoryAPI
@@ -79,8 +79,18 @@ async def _print_status(memory: MemoryAPI) -> None:
     print("\n--- End Status ---\n")
 
 
-async def run_cli(memory: MemoryAPI, source: str = "cli_user") -> None:
-    """Run the interactive CLI loop."""
+async def run_cli(
+    memory: MemoryAPI,
+    source: str = "cli_user",
+    on_action: Any | None = None,
+) -> None:
+    """Run the interactive CLI loop.
+
+    Args:
+        memory: Memory API implementation.
+        source: Source label for observations.
+        on_action: Optional callback invoked after each user action.
+    """
     print(HELP_TEXT)
     print("Ready. Type observations or ?queries:\n")
 
@@ -106,11 +116,15 @@ async def run_cli(memory: MemoryAPI, source: str = "cli_user") -> None:
 
             if line == "/status":
                 await _print_status(memory)
+                if on_action:
+                    on_action()
                 continue
 
             if line == "/clear":
                 await memory.clear()
                 print("Graph cleared.\n")
+                if on_action:
+                    on_action()
                 continue
 
             if line.startswith("?"):
@@ -121,10 +135,14 @@ async def run_cli(memory: MemoryAPI, source: str = "cli_user") -> None:
                 print(f"Thinking...")
                 response = await memory.remember(query)
                 print(f"\n{response}\n")
+                if on_action:
+                    on_action()
             else:
                 print("Recording observation...")
                 obs_id = await memory.observe(line, source=source)
                 print(f"Recorded. (id: {obs_id[:8]}...)\n")
+                if on_action:
+                    on_action()
 
         except KeyboardInterrupt:
             print("\nGoodbye.")

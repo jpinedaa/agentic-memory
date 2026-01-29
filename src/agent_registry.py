@@ -123,6 +123,19 @@ class AgentRegistry:
         # Get push interval config
         push_interval = await self.get_push_interval(agent_id, agent_type, tags or [])
 
+        # Create initial status so the agent appears in list_agents immediately
+        initial_status = AgentStatus(
+            agent_id=agent_id,
+            agent_type=agent_type,
+            tags=tags or [],
+            timestamp=datetime.utcnow().isoformat() + "Z",
+            started_at=datetime.utcnow().isoformat() + "Z",
+            status="running",
+            push_interval_seconds=push_interval,
+        )
+        await self._redis.hset(KEY_STATUS, agent_id, json.dumps(initial_status.to_dict()))
+        await self._notify_status_update(initial_status)
+
         logger.info(f"Registered agent {agent_id} (type={agent_type}, interval={push_interval}s)")
         return agent_id, push_interval
 
@@ -349,6 +362,20 @@ class InMemoryAgentRegistry:
             registered_at=datetime.utcnow().isoformat() + "Z",
         )
         push_interval = await self.get_push_interval(agent_id, agent_type, tags or [])
+
+        # Create initial status
+        initial_status = AgentStatus(
+            agent_id=agent_id,
+            agent_type=agent_type,
+            tags=tags or [],
+            timestamp=datetime.utcnow().isoformat() + "Z",
+            started_at=datetime.utcnow().isoformat() + "Z",
+            status="running",
+            push_interval_seconds=push_interval,
+        )
+        self._statuses[agent_id] = initial_status
+        await self._notify_status_update(initial_status)
+
         return agent_id, push_interval
 
     async def deregister(self, agent_id: str) -> bool:

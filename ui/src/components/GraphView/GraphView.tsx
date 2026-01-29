@@ -65,6 +65,13 @@ function Legend() {
         </div>
       ))}
       <div style={{ fontWeight: 600, fontSize: '10px', marginTop: '4px', marginBottom: '2px', color: 'var(--text-primary)' }}>
+        Edges
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+        <span style={{ width: 14, height: 1, background: 'var(--edge-default)', flexShrink: 0 }} />
+        relationships (labeled)
+      </div>
+      <div style={{ fontWeight: 600, fontSize: '10px', marginTop: '4px', marginBottom: '2px', color: 'var(--text-primary)' }}>
         Interactions
       </div>
       <div>Scroll to zoom</div>
@@ -78,7 +85,7 @@ function Legend() {
 export function GraphView({ maximized, onToggleMaximize }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
-  const { nodes, setNodes, refreshCounter } = useGraphStore();
+  const { nodes, setNodes, links, setLinks, refreshCounter } = useGraphStore();
   const [loading, setLoading] = useState(false);
   const [dimensions, setDimensions] = useState({ width: 0, height: 0 });
   const [fetchError, setFetchError] = useState(false);
@@ -117,6 +124,7 @@ export function GraphView({ maximized, onToggleMaximize }: Props) {
       if (res.ok) {
         const data = await res.json();
         setNodes(data.nodes);
+        setLinks(data.edges || []);
       } else {
         setFetchError(true);
       }
@@ -126,7 +134,7 @@ export function GraphView({ maximized, onToggleMaximize }: Props) {
     } finally {
       setLoading(false);
     }
-  }, [setNodes]);
+  }, [setNodes, setLinks]);
 
   // Fetch on mount
   useEffect(() => {
@@ -223,8 +231,16 @@ export function GraphView({ maximized, onToggleMaximize }: Props) {
     }));
     simNodesRef.current = simNodes;
 
-    // No links for now (could be added from graph edges)
-    const simLinks: SimLink[] = [];
+    // Build links from store edges
+    const nodeIdSet = new Set(simNodes.map((n) => n.id));
+    const simLinks: SimLink[] = links
+      .filter((l) => nodeIdSet.has(l.source) && nodeIdSet.has(l.target))
+      .map((l, i) => ({
+        id: `${l.source}-${l.type}-${l.target}-${i}`,
+        source: l.source,
+        target: l.target,
+        type: l.type,
+      }));
 
     // Update simulation
     simulation.nodes(simNodes);
@@ -233,6 +249,8 @@ export function GraphView({ maximized, onToggleMaximize }: Props) {
 
     // -- Links data join --
     const linksGroup = g.select<SVGGElement>('.links-group');
+
+    // Lines
     const link = linksGroup
       .selectAll<SVGLineElement, SimLink>('line')
       .data(simLinks, (d) => d.id);
@@ -240,8 +258,24 @@ export function GraphView({ maximized, onToggleMaximize }: Props) {
     const linkEnter = link.enter()
       .append('line')
       .attr('stroke', 'var(--edge-default)')
+      .attr('stroke-opacity', 0.6)
       .attr('stroke-width', 1);
     const linkMerged = linkEnter.merge(link);
+
+    // Edge labels
+    const edgeLabel = linksGroup
+      .selectAll<SVGTextElement, SimLink>('text.edge-label')
+      .data(simLinks, (d) => d.id);
+    edgeLabel.exit().remove();
+    const edgeLabelEnter = edgeLabel.enter()
+      .append('text')
+      .attr('class', 'edge-label')
+      .attr('text-anchor', 'middle')
+      .attr('fill', 'var(--text-muted)')
+      .attr('font-size', '7px')
+      .attr('pointer-events', 'none');
+    const edgeLabelMerged = edgeLabelEnter.merge(edgeLabel);
+    edgeLabelMerged.text((d) => (d as SimLink & { type: string }).type || '');
 
     // -- Nodes data join --
     const nodesGroup = g.select<SVGGElement>('.nodes-group');
@@ -325,11 +359,23 @@ export function GraphView({ maximized, onToggleMaximize }: Props) {
         .attr('x2', (d) => ((d.target as unknown as { x: number }).x ?? 0))
         .attr('y2', (d) => ((d.target as unknown as { y: number }).y ?? 0));
 
+      edgeLabelMerged
+        .attr('x', (d) => {
+          const s = d.source as unknown as { x: number };
+          const t = d.target as unknown as { x: number };
+          return ((s.x ?? 0) + (t.x ?? 0)) / 2;
+        })
+        .attr('y', (d) => {
+          const s = d.source as unknown as { y: number };
+          const t = d.target as unknown as { y: number };
+          return ((s.y ?? 0) + (t.y ?? 0)) / 2 - 3;
+        });
+
       nodeMerged.attr('transform', (d) => `translate(${d.x ?? 0},${d.y ?? 0})`);
     });
 
     simulation.alpha(0.3).restart();
-  }, [nodes, dimensions]);
+  }, [nodes, links, dimensions]);
 
   // Update SVG size
   useEffect(() => {

@@ -378,20 +378,40 @@ async def get_system_stats() -> dict[str, Any]:
 
 @app.get("/v1/graph/nodes")
 async def get_graph_nodes(limit: int = 200) -> dict[str, Any]:
-    """Get all nodes for graph visualization."""
+    """Get all nodes and edges for graph visualization."""
     observations = await _memory().get_recent_observations(limit=limit)
     claims = await _memory().get_recent_claims(limit=limit)
     entities = await _memory().get_entities()
 
     nodes = []
+    node_ids = set()
     for obs in observations:
-        nodes.append({"id": obs.get("id", ""), "type": "Observation", "data": obs})
+        nid = obs.get("id", "")
+        nodes.append({"id": nid, "type": "Observation", "data": obs})
+        node_ids.add(nid)
     for claim in claims:
-        nodes.append({"id": claim.get("id", ""), "type": "Claim", "data": claim})
+        nid = claim.get("id", "")
+        nodes.append({"id": nid, "type": "Claim", "data": claim})
+        node_ids.add(nid)
     for entity in entities:
-        nodes.append({"id": entity.get("id", ""), "type": "Entity", "data": entity})
+        nid = entity.get("id", "")
+        nodes.append({"id": nid, "type": "Entity", "data": entity})
+        node_ids.add(nid)
 
-    return {"nodes": nodes, "count": len(nodes)}
+    # Get relationships, filtering to only include edges between returned nodes
+    all_rels = await app.state.store.get_all_relationships(limit=limit * 3)
+    edges = []
+    for rel in all_rels:
+        src = rel.get("source", "")
+        tgt = rel.get("target", "")
+        if src in node_ids and tgt in node_ids:
+            edges.append({
+                "source": src,
+                "target": tgt,
+                "type": rel.get("type", "RELATED"),
+            })
+
+    return {"nodes": nodes, "edges": edges, "count": len(nodes)}
 
 
 # -- Admin --
