@@ -112,8 +112,9 @@ class WorkerAgent(ABC):
                         self._event_received.wait(),
                         timeout=self.poll_interval,
                     )
+                    logger.debug("Agent %s woke: event received", self.source_id)
                 except asyncio.TimeoutError:
-                    pass  # Poll fallback
+                    logger.debug("Agent %s woke: poll timeout (%.1fs)", self.source_id, self.poll_interval)
 
                 self._event_received.clear()
                 await self._tick()
@@ -131,6 +132,10 @@ class WorkerAgent(ABC):
             claims = await self.process()
             elapsed_ms = (time.monotonic() - start) * 1000
             self._processing_times.append(elapsed_ms)
+            logger.debug(
+                "Agent %s tick: %d claim(s) in %.0fms",
+                self.source_id, len(claims), elapsed_ms,
+            )
 
             for claim_text in claims:
                 await self.memory.claim(claim_text, source=self.source_id)

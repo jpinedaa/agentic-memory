@@ -16,9 +16,13 @@ import os
 from pathlib import Path
 from typing import Any
 
+import logging
+
 import yaml
 from jinja2 import Environment, BaseLoader
 from pydantic import BaseModel, Field
+
+logger = logging.getLogger(__name__)
 
 
 # -- Pydantic models for prompt variables --
@@ -125,6 +129,13 @@ class PromptTemplate:
             template = self._env.from_string(self._user_template)
             result["user"] = template.render(**vars_dict)
 
+        logger.debug(
+            "render: template=%s, vars=%s, system=%d chars, user=%d chars",
+            self.name,
+            list(vars_dict.keys()),
+            len(result["system"] or ""),
+            len(result["user"] or ""),
+        )
         return result
 
     def render_system(self, variables: BaseModel | dict[str, Any] | None = None) -> str:
@@ -167,6 +178,7 @@ class PromptLoader:
         """
         raw = self._load_raw(prompt_path)
         resolved = self._resolve_inheritance(raw)
+        logger.debug("load: %s (version=%s)", prompt_path, resolved.get("version", "?"))
 
         return PromptTemplate(
             name=resolved.get("name", prompt_path),
@@ -181,12 +193,14 @@ class PromptLoader:
     def _load_raw(self, prompt_path: str) -> dict[str, Any]:
         """Load raw YAML without resolving inheritance."""
         if prompt_path in self._cache:
+            logger.debug("_load_raw: cache hit for %s", prompt_path)
             return self._cache[prompt_path]
 
         file_path = self._base_path / f"{prompt_path}.yaml"
         if not file_path.exists():
             raise FileNotFoundError(f"Prompt template not found: {file_path}")
 
+        logger.debug("_load_raw: loading %s", file_path)
         with open(file_path, encoding="utf-8") as f:
             data = yaml.safe_load(f)
 
@@ -199,6 +213,7 @@ class PromptLoader:
             return data
 
         parent_path = data["extends"]
+        logger.debug("_resolve_inheritance: %s extends %s", data.get("name", "?"), parent_path)
         parent_raw = self._load_raw(parent_path)
         parent = self._resolve_inheritance(parent_raw)
 

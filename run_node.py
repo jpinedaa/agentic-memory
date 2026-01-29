@@ -40,13 +40,9 @@ if TYPE_CHECKING:
 
 load_dotenv()
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
-)
-logging.getLogger("neo4j.notifications").setLevel(logging.ERROR)
-logging.getLogger("httpx").setLevel(logging.WARNING)
-logging.getLogger("websockets").setLevel(logging.WARNING)
+from src.logging_config import log_init
+
+log_init()
 logger = logging.getLogger(__name__)
 
 

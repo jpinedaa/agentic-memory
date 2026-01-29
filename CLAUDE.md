@@ -82,6 +82,7 @@ pytest                            # all tests (needs Neo4j + API key)
 | `NODE_HOST` | `0.0.0.0` | Node bind host |
 | `BOOTSTRAP_PEERS` | (none) | Comma-separated bootstrap peer URLs |
 | `ADVERTISE_HOST` | (listen host) | Hostname other nodes use to reach this node (for Docker/k8s) |
+| `LOG_CONFIG` | `logging.json` | Path to JSON logging dictConfig file |
 | `POLL_INTERVAL` | `30` | Agent poll fallback interval (seconds) |
 
 ## Architecture

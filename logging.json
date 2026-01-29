@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "disable_existing_loggers": false,
+  "formatters": {
+    "standard": {
+      "format": "%(asctime)s [%(name)s] %(levelname)s: %(message)s"
+    }
+  },
+  "handlers": {
+    "console": {
+      "class": "logging.StreamHandler",
+      "formatter": "standard",
+      "stream": "ext://sys.stderr"
+    }
+  },
+  "root": {
+    "level": "INFO",
+    "handlers": ["console"]
+  },
+  "loggers": {
+    "neo4j.notifications": { "level": "ERROR" },
+    "httpx": { "level": "WARNING" },
+    "websockets": { "level": "WARNING" }
+  }
+}

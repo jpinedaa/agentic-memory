@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "disable_existing_loggers": false,
+  "formatters": {
+    "standard": {
+      "format": "%(asctime)s [%(name)s] %(levelname)s: %(message)s"
+    }
+  },
+  "handlers": {
+    "console": {
+      "class": "logging.StreamHandler",
+      "formatter": "standard",
+      "stream": "ext://sys.stderr"
+    }
+  },
+  "root": {
+    "level": "INFO",
+    "handlers": ["console"]
+  },
+  "loggers": {
+    "neo4j.notifications": { "level": "ERROR" },
+    "httpx": { "level": "WARNING" },
+    "websockets": { "level": "WARNING" },
+    "src.agents.base": { "level": "DEBUG" },
+    "src.agents.inference": { "level": "DEBUG" },
+    "src.agents.validator": { "level": "DEBUG" },
+    "src.llm": { "level": "DEBUG" },
+    "src.prompts": { "level": "DEBUG" }
+  }
+}

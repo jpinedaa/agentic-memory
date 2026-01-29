@@ -46,6 +46,7 @@ class InferenceAgent(WorkerAgent):
     async def process(self) -> list[str]:
         """Check for unprocessed observations and infer claims."""
         observations = await self.memory.get_recent_observations(limit=10)
+        logger.debug("Fetched %d observations to process", len(observations))
 
         claims = []
         for obs in observations:
@@ -54,16 +55,19 @@ class InferenceAgent(WorkerAgent):
             # Skip observations from before this agent started (stale data)
             obs_ts = obs.get("timestamp", "")
             if obs_ts and obs_ts < self._inference_started_at:
+                logger.debug("Skipping stale observation %s (ts=%s < started=%s)", obs_id, obs_ts, self._inference_started_at)
                 if self.state:
                     await self.state.mark_processed(STATE_KEY, obs_id)
                 continue
 
             # Check if already processed
             if self.state and await self.state.is_processed(STATE_KEY, obs_id):
+                logger.debug("Skipping already-processed observation %s", obs_id)
                 continue
 
             raw = obs.get("raw_content", "")
             if not raw:
+                logger.debug("Skipping observation %s (empty raw_content)", obs_id)
                 if self.state:
                     await self.state.mark_processed(STATE_KEY, obs_id)
                 continue
@@ -74,9 +78,11 @@ class InferenceAgent(WorkerAgent):
                     f"inference:{obs_id}", self.source_id, ttl=300
                 )
                 if not acquired:
+                    logger.debug("Lock not acquired for observation %s", obs_id)
                     continue
 
             logger.info("InferenceAgent processing observation: %s", obs_id)
+            logger.debug("Observation text: %s", raw[:200])
 
             try:
                 claim_text = await self.memory.infer(raw)

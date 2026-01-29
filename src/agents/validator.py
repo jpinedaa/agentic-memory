@@ -44,6 +44,7 @@ class ValidatorAgent(WorkerAgent):
     async def process(self) -> list[str]:  # pylint: disable=too-many-locals  # contradiction detection requires tracking many pair-wise variables
         """Check for contradicting claims and flag them."""
         claims = await self.memory.get_recent_claims(limit=20)
+        logger.debug("Fetched %d claims to validate", len(claims))
 
         # Group claims by entity (subject_text)
         by_subject: dict[str, list[dict]] = {}
@@ -52,6 +53,8 @@ class ValidatorAgent(WorkerAgent):
             by_subject.setdefault(subj, []).append(c)
 
         contradiction_claims = []
+
+        logger.debug("Grouped into %d subjects: %s", len(by_subject), list(by_subject.keys()))
 
         for subject, subject_claims in by_subject.items():
             by_predicate: dict[str, list[dict]] = {}
@@ -74,6 +77,7 @@ class ValidatorAgent(WorkerAgent):
 
                         # Check if already flagged
                         if self.state and await self.state.is_processed(STATE_KEY, pair_key):
+                            logger.debug("Skipping already-checked pair %s", pair_key)
                             continue
 
                         claim_text = (

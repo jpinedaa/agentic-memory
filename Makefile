@@ -25,6 +25,12 @@ dev-validator: ## Run a validator node locally (bootstrap to localhost:9000)
 dev-cli: ## Run a CLI node locally (bootstrap to localhost:9000)
 	.venv/bin/python run_node.py --capabilities cli --port 9003 --bootstrap http://localhost:9000
 
+# ── Debug ──────────────────────────────────────────────────────────
+
+debug-agents: ## Run dev mode with DEBUG logging for agents, LLM, and prompts
+	docker compose up neo4j -d
+	LOG_CONFIG=logging.debug-agents.json .venv/bin/python main.py
+
 # ── Testing ─────────────────────────────────────────────────────────
 
 test: ## Run all tests that don't need Neo4j or API key
