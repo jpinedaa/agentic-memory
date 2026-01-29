@@ -1,4 +1,7 @@
 """Tests for the prompt template system."""
+# pylint: disable=missing-function-docstring  # test names are self-documenting
+# pylint: disable=redefined-builtin  # test var `vars` shadows builtin; harmless in test scope
+# pylint: disable=redefined-outer-name  # pytest fixture injection pattern
 
 import pytest
 
@@ -8,7 +11,6 @@ from src.prompts import (
     ObservationVars,
     ClaimVars,
     InferenceVars,
-    QueryGenerationVars,
     SynthesisVars,
 )
 

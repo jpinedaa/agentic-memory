@@ -3,6 +3,8 @@
 These tests call the real Claude API. Set ANTHROPIC_API_KEY to run them.
 Skip with: pytest -m "not llm"
 """
+# pylint: disable=missing-function-docstring  # test names are self-documenting
+# pylint: disable=redefined-outer-name  # pytest fixture injection pattern
 
 import pytest
 

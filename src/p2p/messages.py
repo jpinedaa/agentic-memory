@@ -34,6 +34,7 @@ class Envelope:
     payload: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
+        """Serialize the envelope to a dict."""
         return {
             "msg_type": self.msg_type,
             "msg_id": self.msg_id,
@@ -47,6 +48,7 @@ class Envelope:
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> Envelope:
+        """Deserialize an envelope from a dict."""
         return cls(
             msg_type=d["msg_type"],
             msg_id=d.get("msg_id", uuid.uuid4().hex[:16]),

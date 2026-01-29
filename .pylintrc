@@ -1,0 +1,108 @@
+[MAIN]
+jobs=1
+
+[MESSAGES CONTROL]
+# Global suppressions — only for patterns that are structurally inherent to this project.
+# All other suppressions use inline `# pylint: disable=...` with a reason comment.
+#
+# too-few-public-methods:
+#   Frozen dataclasses (PeerInfo), protocols (MemoryAPI), and config classes (StoreConfig)
+#   legitimately expose few or no public methods.
+#
+# duplicate-code:
+#   main.py (dev-mode launcher) and run_node.py (distributed launcher) intentionally share
+#   logging setup and P2P bootstrap code — they are separate entry points, not refactor targets.
+disable=
+    too-few-public-methods,
+    duplicate-code
+
+# ── Inline suppression reference ──────────────────────────────────────────────
+#
+# This section documents every inline `# pylint: disable=` used in the codebase,
+# grouped by rule, with rationale for each.
+#
+# broad-exception-caught (W0718)
+#   Used in: src/agents/base.py, src/agents/inference.py, src/cli.py,
+#            src/interfaces.py, src/p2p/node.py, src/p2p/transport.py,
+#            src/p2p/ui_bridge.py
+#   Rationale: Network handlers, agent loops, and WebSocket dispatch must catch all
+#   exceptions to avoid crashing the event loop. Each site logs the exception for
+#   debugging. Narrower types would miss driver errors, serialization failures, etc.
+#
+# import-outside-toplevel (C0415)
+#   Used in: main.py, run_node.py, src/p2p/node.py, src/p2p/transport.py,
+#            src/p2p/ui_bridge.py, tests/test_p2p.py
+#   Rationale: Entry points (main.py, run_node.py) defer heavy imports until after
+#   argument parsing and dotenv loading for faster --help and cleaner error messages.
+#   P2P modules use lazy imports to break circular dependencies between node, transport,
+#   and ui_bridge. Tests import inside methods to scope PeerNode construction.
+#
+# protected-access (W0212)
+#   Used in: src/p2p/gossip.py, src/p2p/memory_client.py, src/p2p/ui_bridge.py,
+#            src/interfaces.py, tests/test_p2p.py
+#   Rationale: P2P internal modules (gossip, memory_client, ui_bridge) are tightly
+#   coupled to PeerNode by design — they access _running, _heartbeat_seq, and
+#   _broadcast_event as internal collaborators, not external consumers.
+#   MemoryService.infer() accesses LLMTranslator._client/_model because inference
+#   requires raw Claude API access not exposed on the public interface.
+#   Tests access private state for verification.
+#
+# missing-function-docstring (C0116) / missing-class-docstring (C0115)
+#   Used in: tests/test_*.py, src/memory_protocol.py
+#   Rationale: Test function and class names are self-documenting (e.g.,
+#   test_handle_ping, TestRoutingTable). Protocol stub methods in memory_protocol.py
+#   use `... ` bodies with no implementation to document.
+#
+# redefined-outer-name (W0621)
+#   Used in: tests/test_*.py
+#   Rationale: Standard pytest fixture injection pattern — fixture function names
+#   match parameter names by design.
+#
+# redefined-builtin (W0622)
+#   Used in: tests/test_prompts.py
+#   Rationale: Test variable `vars` shadows the built-in; harmless in test scope.
+#   Source code was refactored to use `tpl_vars` instead.
+#
+# unused-argument (W0613)
+#   Used in: src/agents/base.py (on_network_event), src/interfaces.py (_broad_search),
+#            src/p2p/local_state.py (try_acquire), tests/test_p2p.py
+#   Rationale: on_network_event receives `data` for subclass use but the base
+#   implementation only checks event_type. _broad_search accepts `query` to match
+#   the search interface but currently does a broad fetch. try_acquire accepts `ttl`
+#   for interface compatibility with Redis-backed implementations.
+#
+# try-except-raise (W0706)
+#   Used in: src/agents/base.py
+#   Rationale: `except CancelledError: raise` followed by `except Exception` is the
+#   standard asyncio pattern to let cancellation propagate while catching all other errors.
+#
+# too-many-locals (R0914) / too-many-statements (R0915) / too-many-branches (R0912)
+#   Used in: main.py (main), run_node.py (main), src/agents/validator.py (process),
+#            src/cli.py (_print_status, run_cli), src/p2p/ui_bridge.py (create_ui_bridge)
+#   Rationale: Entry-point functions (main) orchestrate full node setup and are intentionally
+#   monolithic. CLI run_cli handles multiple command types in one loop. The UI bridge
+#   factory creates multiple endpoints in one function for router cohesion. Validator
+#   process() builds contradiction pairs with inherently many locals.
+#
+# unnecessary-ellipsis (W2301)
+#   Used in: src/agents/base.py
+#   Rationale: Abstract method body uses `...` as the conventional placeholder.
+#
+# global-statement (W0603) / invalid-name (C0103)
+#   Used in: src/prompts.py
+#   Rationale: Module-level singleton pattern for the default PromptLoader. The
+#   `_default_loader` name uses lowercase by convention for private module state.
+#   The global statement is required by the singleton getter.
+
+[FORMAT]
+max-line-length=120
+
+[DESIGN]
+# Raised from defaults to accommodate:
+# - max-args/max-positional-arguments: PeerNode.__init__ takes 6 params (host, port,
+#   capabilities, bootstrap_peers, node_id, advertise_host)
+# - max-attributes: PeerNode has 18 attributes (transport, routing, gossip, lifecycle
+#   state, event listeners, URL overrides, etc.)
+max-args=8
+max-positional-arguments=8
+max-attributes=20

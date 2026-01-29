@@ -2,6 +2,8 @@
 
 Requires both Neo4j and Claude API access.
 """
+# pylint: disable=missing-function-docstring  # test names are self-documenting
+# pylint: disable=redefined-outer-name  # pytest fixture injection pattern
 
 import pytest
 

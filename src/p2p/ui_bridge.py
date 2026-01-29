@@ -1,4 +1,6 @@
 """UI bridge: translates P2P network state into the /v1/ API the React frontend expects."""
+# pylint: disable=import-outside-toplevel  # lazy import avoids circular dependency with types module
+# pylint: disable=protected-access  # UI bridge is an internal collaborator of PeerNode
 
 from __future__ import annotations
 
@@ -55,6 +57,7 @@ def _peer_to_agent(peer_state) -> dict[str, Any]:
     }
 
 
+# pylint: disable-next=too-many-statements  # factory creates multiple endpoints for a single router
 def create_ui_bridge(node: PeerNode, store: TripleStore) -> APIRouter:
     """Create a FastAPI router with /v1/ endpoints for the React UI."""
     router = APIRouter(prefix="/v1")
@@ -70,7 +73,7 @@ def create_ui_bridge(node: PeerNode, store: TripleStore) -> APIRouter:
                     await ws.send_text(payload)
                 else:
                     dead.append(ws)
-            except Exception:
+            except Exception:  # pylint: disable=broad-exception-caught  # dead WebSocket must not crash broadcast
                 dead.append(ws)
         for ws in dead:
             ui_clients.remove(ws)
@@ -162,7 +165,7 @@ def create_ui_bridge(node: PeerNode, store: TripleStore) -> APIRouter:
 
         except WebSocketDisconnect:
             logger.info("UI client disconnected")
-        except Exception:
+        except Exception:  # pylint: disable=broad-exception-caught  # WebSocket error must not crash the server
             logger.debug("UI WebSocket error", exc_info=True)
         finally:
             if websocket in ui_clients:
@@ -194,7 +197,7 @@ def create_ui_bridge(node: PeerNode, store: TripleStore) -> APIRouter:
             ]
 
             return {"nodes": nodes, "edges": edges}
-        except Exception:
+        except Exception:  # pylint: disable=broad-exception-caught  # graph query failure returns empty result
             logger.debug("Error fetching graph data", exc_info=True)
             return {"nodes": [], "edges": []}
 
@@ -272,7 +275,7 @@ def create_ui_bridge(node: PeerNode, store: TripleStore) -> APIRouter:
                 "total_entities": entity_count[0]["c"] if entity_count else 0,
                 "websocket_clients": len(ui_clients),
             }
-        except Exception:
+        except Exception:  # pylint: disable=broad-exception-caught  # stats query failure returns fallback data
             logger.debug("Error fetching stats", exc_info=True)
             return {
                 "network": {

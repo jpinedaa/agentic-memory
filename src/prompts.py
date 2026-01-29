@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from jinja2 import Environment, BaseLoader, TemplateNotFound
+from jinja2 import Environment, BaseLoader
 from pydantic import BaseModel, Field
 
 
@@ -187,7 +187,7 @@ class PromptLoader:
         if not file_path.exists():
             raise FileNotFoundError(f"Prompt template not found: {file_path}")
 
-        with open(file_path) as f:
+        with open(file_path, encoding="utf-8") as f:
             data = yaml.safe_load(f)
 
         self._cache[prompt_path] = data
@@ -231,12 +231,12 @@ class PromptLoader:
 
 # -- Singleton loader for convenience --
 
-_default_loader: PromptLoader | None = None
+_default_loader: PromptLoader | None = None  # pylint: disable=invalid-name  # lowercase _default_loader is conventional for private module state
 
 
 def get_loader() -> PromptLoader:
     """Get the default prompt loader (singleton)."""
-    global _default_loader
+    global _default_loader  # pylint: disable=global-statement  # singleton getter requires global for module-level cache
     if _default_loader is None:
         _default_loader = PromptLoader()
     return _default_loader

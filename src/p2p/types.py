@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import time
 import uuid
 from dataclasses import dataclass, field
 from enum import Enum
@@ -31,6 +30,7 @@ class PeerInfo:
     version: str = "0.3.0"
 
     def to_dict(self) -> dict[str, Any]:
+        """Serialize peer info to a dict."""
         return {
             "node_id": self.node_id,
             "capabilities": sorted(c.value for c in self.capabilities),
@@ -42,6 +42,7 @@ class PeerInfo:
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> PeerInfo:
+        """Deserialize peer info from a dict."""
         return cls(
             node_id=d["node_id"],
             capabilities=frozenset(Capability(c) for c in d["capabilities"]),
@@ -63,6 +64,7 @@ class PeerState:
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
+        """Serialize peer state to a dict."""
         return {
             "info": self.info.to_dict(),
             "status": self.status,
@@ -73,6 +75,7 @@ class PeerState:
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> PeerState:
+        """Deserialize peer state from a dict."""
         return cls(
             info=PeerInfo.from_dict(d["info"]),
             status=d.get("status", "alive"),

@@ -1,4 +1,5 @@
 """Transport layer: HTTP + WebSocket server and client for P2P communication."""
+# pylint: disable=import-outside-toplevel  # lazy import breaks circular dependency with messages/ui_bridge
 
 from __future__ import annotations
 
@@ -66,8 +67,8 @@ class TransportServer:
         except WebSocketDisconnect:
             if peer_id:
                 self._inbound_ws.pop(peer_id, None)
-                logger.info(f"Peer {peer_id} disconnected (inbound WS)")
-        except Exception:
+                logger.info("Peer %s disconnected (inbound WS)", peer_id)
+        except Exception:  # pylint: disable=broad-exception-caught  # WebSocket handler must not crash the server
             if peer_id:
                 self._inbound_ws.pop(peer_id, None)
             logger.debug("WebSocket connection error", exc_info=True)
@@ -93,7 +94,7 @@ class TransportServer:
             try:
                 await ws.send_json(data)
                 return True
-            except Exception:
+            except Exception:  # pylint: disable=broad-exception-caught  # WebSocket handler must not crash the server
                 self._inbound_ws.pop(peer_id, None)
         return False
 
@@ -108,7 +109,7 @@ class TransportServer:
                     count += 1
                 else:
                     dead.append(peer_id)
-            except Exception:
+            except Exception:  # pylint: disable=broad-exception-caught  # send failure must not crash broadcast
                 dead.append(peer_id)
         for peer_id in dead:
             self._inbound_ws.pop(peer_id, None)
@@ -116,9 +117,11 @@ class TransportServer:
 
     @property
     def inbound_peer_ids(self) -> set[str]:
+        """Return IDs of all inbound WebSocket peers."""
         return set(self._inbound_ws.keys())
 
     async def start(self, host: str, port: int) -> None:
+        """Start the HTTP+WS server."""
         config = uvicorn.Config(
             self.app, host=host, port=port, log_level="warning"
         )
@@ -128,6 +131,7 @@ class TransportServer:
         await asyncio.sleep(0.3)
 
     async def stop(self) -> None:
+        """Stop the server."""
         if self._server_task:
             self._server_task.cancel()
             try:
@@ -150,8 +154,8 @@ class TransportClient:
             r = await self._http.post(url, json=data)
             r.raise_for_status()
             return r.json()
-        except Exception:
-            logger.debug(f"HTTP POST to {url} failed", exc_info=True)
+        except Exception:  # pylint: disable=broad-exception-caught  # HTTP failure must not crash the caller
+            logger.debug("HTTP POST to %s failed", url, exc_info=True)
             return None
 
     async def ws_connect(
@@ -170,10 +174,10 @@ class TransportClient:
                 self._ws_tasks[node_id] = asyncio.create_task(
                     self._ws_read_loop(node_id, ws, on_message)
                 )
-            logger.info(f"Connected outbound WS to {node_id} at {ws_url}")
+            logger.info("Connected outbound WS to %s at %s", node_id, ws_url)
             return True
-        except Exception:
-            logger.debug(f"Failed to connect WS to {node_id} at {ws_url}")
+        except Exception:  # pylint: disable=broad-exception-caught  # connection failure must not crash the caller
+            logger.debug("Failed to connect WS to %s at %s", node_id, ws_url)
             return False
 
     async def _ws_read_loop(
@@ -188,12 +192,12 @@ class TransportClient:
                 try:
                     data = json.loads(raw) if isinstance(raw, str) else raw
                     await on_message(data)
-                except Exception:
-                    logger.debug(f"Error handling WS message from {node_id}", exc_info=True)
+                except Exception:  # pylint: disable=broad-exception-caught  # message handler must not crash the WS loop
+                    logger.debug("Error handling WS message from %s", node_id, exc_info=True)
         except websockets.ConnectionClosed:
-            logger.info(f"Outbound WS to {node_id} closed")
-        except Exception:
-            logger.debug(f"Outbound WS read error for {node_id}", exc_info=True)
+            logger.info("Outbound WS to %s closed", node_id)
+        except Exception:  # pylint: disable=broad-exception-caught  # message handler must not crash the WS loop
+            logger.debug("Outbound WS read error for %s", node_id, exc_info=True)
         finally:
             self._outbound_ws.pop(node_id, None)
             self._ws_tasks.pop(node_id, None)
@@ -205,7 +209,7 @@ class TransportClient:
             try:
                 await ws.send(json.dumps(data, default=str))
                 return True
-            except Exception:
+            except Exception:  # pylint: disable=broad-exception-caught  # send failure must not crash broadcast
                 self._outbound_ws.pop(node_id, None)
         return False
 
@@ -218,7 +222,7 @@ class TransportClient:
             try:
                 await ws.send(payload)
                 count += 1
-            except Exception:
+            except Exception:  # pylint: disable=broad-exception-caught  # send failure must not crash broadcast
                 dead.append(node_id)
         for node_id in dead:
             self._outbound_ws.pop(node_id, None)
@@ -226,12 +230,15 @@ class TransportClient:
 
     @property
     def connected_peer_ids(self) -> set[str]:
+        """Return IDs of all outbound WebSocket peers."""
         return set(self._outbound_ws.keys())
 
     def is_connected(self, node_id: str) -> bool:
+        """Check if a peer has an outbound WebSocket connection."""
         return node_id in self._outbound_ws
 
     async def close_peer(self, node_id: str) -> None:
+        """Close the outbound connection to a specific peer."""
         ws = self._outbound_ws.pop(node_id, None)
         if ws:
             await ws.close()
@@ -240,10 +247,11 @@ class TransportClient:
             task.cancel()
 
     async def close_all(self) -> None:
+        """Close all outbound connections and the HTTP client."""
         for ws in list(self._outbound_ws.values()):
             try:
                 await ws.close()
-            except Exception:
+            except Exception:  # pylint: disable=broad-exception-caught  # close failure must not crash cleanup
                 pass
         self._outbound_ws.clear()
         for task in self._ws_tasks.values():

@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import random
-from typing import Any
-
 from src.p2p.types import Capability, PeerState
 
 
@@ -56,6 +54,7 @@ class RoutingTable:
         return False
 
     def remove_peer(self, node_id: str) -> None:
+        """Remove a peer from the routing table."""
         self._peers.pop(node_id, None)
 
     def find_peers_with_capability(
@@ -89,6 +88,7 @@ class RoutingTable:
         return random.choice(candidates)
 
     def get_alive_peers(self, exclude: str = "") -> list[PeerState]:
+        """Return all alive peers, optionally excluding one."""
         return [
             ps
             for ps in self._peers.values()
@@ -96,8 +96,10 @@ class RoutingTable:
         ]
 
     def get_all_peers(self) -> list[PeerState]:
+        """Return all known peers regardless of status."""
         return list(self._peers.values())
 
     @property
     def peer_count(self) -> int:
+        """Return the number of known peers."""
         return len(self._peers)

@@ -169,7 +169,7 @@ class MemoryService:
         try:
             cypher = await self.llm.generate_query(query)
             results = await self.store.raw_query(cypher)
-        except Exception:
+        except Exception:  # pylint: disable=broad-exception-caught  # fallback to broad search if query generation fails
             # Fallback: gather broad context if query generation fails
             results = []
 
@@ -191,6 +191,7 @@ class MemoryService:
 
         return await self.llm.synthesize_response(query, serializable)
 
+    # pylint: disable-next=unused-argument  # `query` kept for interface consistency; broad fetch for now
     async def _broad_search(self, query: str) -> list[dict]:
         """Fallback search: get recent observations, claims, and resolutions."""
         obs = await self.store.find_recent_observations(limit=10)
@@ -231,27 +232,32 @@ class MemoryService:
     # -- Facade methods (satisfy MemoryAPI protocol) --
 
     async def get_recent_observations(self, limit: int = 10) -> list[dict[str, Any]]:
+        """Return recent observations from the store."""
         return await self.store.find_recent_observations(limit=limit)
 
     async def get_recent_claims(self, limit: int = 20) -> list[dict[str, Any]]:
+        """Return recent claims from the store."""
         return await self.store.find_recent_claims(limit=limit)
 
     async def get_unresolved_contradictions(
         self,
     ) -> list[tuple[dict[str, Any], dict[str, Any]]]:
+        """Return unresolved contradiction pairs."""
         return await self.store.find_unresolved_contradictions()
 
     async def get_entities(self) -> list[dict[str, Any]]:
+        """Return all entity nodes."""
         return await self.store.query_by_type("Entity")
 
     async def infer(self, observation_text: str) -> str | None:
         """Use the LLM to produce an inference claim from an observation."""
         prompt = self._prompt_loader.load("inference_agent/infer")
-        vars = InferenceVars(observation_text=observation_text)
-        rendered = prompt.render(vars)
+        tpl_vars = InferenceVars(observation_text=observation_text)
+        rendered = prompt.render(tpl_vars)
 
+        # pylint: disable-next=protected-access  # infer() needs raw Claude API not exposed publicly
         response = await self.llm._client.messages.create(
-            model=self.llm._model,
+            model=self.llm._model,  # pylint: disable=protected-access
             max_tokens=256,
             system=rendered["system"] or "",
             messages=[{"role": "user", "content": rendered["user"] or ""}],
@@ -266,6 +272,7 @@ class MemoryService:
         return text
 
     async def clear(self) -> None:
+        """Clear all data from the graph."""
         await self.store.clear_all()
 
 

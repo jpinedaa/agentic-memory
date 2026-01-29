@@ -5,6 +5,7 @@ validation, and CLI on localhost with different ports.
 
 No external dependencies beyond Neo4j and a Claude API key.
 """
+# pylint: disable=import-outside-toplevel  # deferred imports until after dotenv/arg parsing
 
 from __future__ import annotations
 
@@ -26,7 +27,8 @@ logging.getLogger("websockets").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 
-async def main() -> None:
+async def main() -> None:  # pylint: disable=too-many-locals,too-many-statements  # orchestrates full node setup
+    """Run all P2P nodes in-process for dev mode."""
     from src.p2p.types import Capability
     from src.p2p.node import PeerNode
     from src.p2p.memory_client import P2PMemoryClient

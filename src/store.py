@@ -6,6 +6,7 @@ relationships for references between nodes.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -14,9 +15,10 @@ from neo4j import AsyncDriver, AsyncGraphDatabase
 
 @dataclass
 class StoreConfig:
-    uri: str = "bolt://localhost:7687"
-    username: str = "neo4j"
-    password: str = "memory-system"
+    """Neo4j connection configuration."""
+    uri: str = field(default_factory=lambda: os.environ.get("NEO4J_URI", "bolt://localhost:7687"))
+    username: str = field(default_factory=lambda: os.environ.get("NEO4J_USERNAME", "neo4j"))
+    password: str = field(default_factory=lambda: os.environ.get("NEO4J_PASSWORD", "memory-system"))
 
 
 class TripleStore:
@@ -27,6 +29,7 @@ class TripleStore:
 
     @classmethod
     async def connect(cls, config: StoreConfig | None = None) -> "TripleStore":
+        """Connect to Neo4j and return a TripleStore instance."""
         config = config or StoreConfig()
         driver = AsyncGraphDatabase.driver(
             config.uri, auth=(config.username, config.password)
@@ -35,6 +38,7 @@ class TripleStore:
         return cls(driver)
 
     async def close(self) -> None:
+        """Close the Neo4j driver connection."""
         await self._driver.close()
 
     # -- writes --

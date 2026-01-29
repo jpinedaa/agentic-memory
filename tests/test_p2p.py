@@ -4,6 +4,11 @@ These tests verify types, serialization, routing, gossip, node lifecycle,
 P2PMemoryClient, and LocalAgentState — all without external dependencies
 (no Neo4j, no API key, no network).
 """
+# pylint: disable=missing-function-docstring  # test names are self-documenting
+# pylint: disable=missing-class-docstring  # test class names are self-documenting
+# pylint: disable=import-outside-toplevel  # tests import inside methods to scope construction
+# pylint: disable=protected-access  # tests verify internal state
+# pylint: disable=unused-argument  # pytest fixtures injected by name
 
 import asyncio
 import time
@@ -34,13 +39,13 @@ class TestCapability:
 
 class TestPeerInfo:
     def _make_info(self, **kwargs):
-        defaults = dict(
-            node_id="node-abc123",
-            capabilities=frozenset({Capability.STORE, Capability.LLM}),
-            http_url="http://localhost:9000",
-            ws_url="ws://localhost:9000/p2p/ws",
-            started_at=1000.0,
-        )
+        defaults = {
+            "node_id": "node-abc123",
+            "capabilities": frozenset({Capability.STORE, Capability.LLM}),
+            "http_url": "http://localhost:9000",
+            "ws_url": "ws://localhost:9000/p2p/ws",
+            "started_at": 1000.0,
+        }
         defaults.update(kwargs)
         return PeerInfo(**defaults)
 
@@ -74,7 +79,7 @@ class TestPeerState:
             http_url="http://localhost:9000",
             ws_url="ws://localhost:9000/p2p/ws",
         )
-        defaults = dict(info=info, status="alive", last_seen=time.time(), heartbeat_seq=1)
+        defaults = {"info": info, "status": "alive", "last_seen": time.time(), "heartbeat_seq": 1}
         defaults.update(kwargs)
         return PeerState(**defaults)
 
@@ -115,7 +120,7 @@ class TestEnvelope:
         assert e.recipient_id == ""
         assert e.ttl == 3
         assert e.reply_to == ""
-        assert e.payload == {}
+        assert not e.payload
         assert len(e.msg_id) == 16
 
     def test_serialization_roundtrip(self):
@@ -596,7 +601,8 @@ class TestWorkerAgent:
             def __init__(self):
                 # Minimal mock memory
                 class MockMem:
-                    async def claim(self, text, source): return "c-1"
+                    async def claim(self, text, source):
+                        return "c-1"
                 super().__init__(
                     source_id="test", memory=MockMem(),
                     poll_interval=999,  # very long poll so event must wake it
@@ -688,7 +694,6 @@ class TestUrlOverrides:
     def test_gossip_preserves_overrides(self):
         """Gossip should re-apply URL overrides so they don't get reset."""
         from src.p2p.node import PeerNode
-        from src.p2p.gossip import GossipProtocol
 
         node = PeerNode(
             capabilities={Capability.CLI},

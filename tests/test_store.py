@@ -2,6 +2,8 @@
 
 Requires a running Neo4j instance (docker compose up).
 """
+# pylint: disable=missing-function-docstring  # test names are self-documenting
+# pylint: disable=redefined-outer-name  # pytest fixture injection pattern
 
 import pytest
 

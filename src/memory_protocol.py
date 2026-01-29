@@ -1,3 +1,4 @@
+# pylint: disable=missing-function-docstring  # protocol stubs use `...` bodies; names are self-documenting
 """MemoryAPI protocol — shared contract for MemoryService and MemoryClient.
 
 Both in-process (MemoryService) and HTTP (MemoryClient) implementations

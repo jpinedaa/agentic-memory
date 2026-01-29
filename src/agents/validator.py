@@ -41,7 +41,7 @@ class ValidatorAgent(WorkerAgent):
     def event_types(self) -> list[str]:
         return ["claim"]
 
-    async def process(self) -> list[str]:
+    async def process(self) -> list[str]:  # pylint: disable=too-many-locals  # contradiction detection requires tracking many pair-wise variables
         """Check for contradicting claims and flag them."""
         claims = await self.memory.get_recent_claims(limit=20)
 
@@ -86,8 +86,9 @@ class ValidatorAgent(WorkerAgent):
                             await self.state.mark_processed(STATE_KEY, pair_key)
 
                         logger.info(
-                            f"ValidatorAgent found contradiction: "
-                            f"{obj1} vs {obj2} for {subject}.{predicate}"
+                            "ValidatorAgent found contradiction: "
+                            "%s vs %s for %s.%s",
+                            obj1, obj2, subject, predicate,
                         )
 
         return contradiction_claims

@@ -76,7 +76,7 @@ class InferenceAgent(WorkerAgent):
                 if not acquired:
                     continue
 
-            logger.info(f"InferenceAgent processing observation: {obs_id}")
+            logger.info("InferenceAgent processing observation: %s", obs_id)
 
             try:
                 claim_text = await self.memory.infer(raw)
@@ -84,8 +84,8 @@ class InferenceAgent(WorkerAgent):
                     claims.append(claim_text)
                 else:
                     logger.info("InferenceAgent skipped observation (no meaningful inference)")
-            except Exception:
-                logger.exception(f"InferenceAgent failed to infer from: {obs_id}")
+            except Exception:  # pylint: disable=broad-exception-caught  # individual observation failure must not stop the agent
+                logger.exception("InferenceAgent failed to infer from: %s", obs_id)
 
             if self.state:
                 await self.state.mark_processed(STATE_KEY, obs_id)

@@ -10,6 +10,8 @@ Runs the full flow:
 6. User queries "what are my meeting preferences?"
 7. System returns resolved response favoring afternoon
 """
+# pylint: disable=missing-function-docstring  # test names are self-documenting
+# pylint: disable=redefined-outer-name  # pytest fixture injection pattern
 
 import pytest
 

@@ -23,6 +23,7 @@ Examples:
     # CLI node
     python run_node.py --capabilities cli --port 9003 --bootstrap http://localhost:9000
 """
+# pylint: disable=import-outside-toplevel  # deferred imports until after dotenv/arg parsing
 
 from __future__ import annotations
 
@@ -30,8 +31,12 @@ import argparse
 import asyncio
 import logging
 import os
+from typing import TYPE_CHECKING
 
 from dotenv import load_dotenv
+
+if TYPE_CHECKING:
+    from src.p2p.node import PeerNode
 
 load_dotenv()
 
@@ -46,6 +51,7 @@ logger = logging.getLogger(__name__)
 
 
 def parse_args() -> argparse.Namespace:
+    """Parse command-line arguments for node configuration."""
     parser = argparse.ArgumentParser(description="Run a P2P agentic memory node")
     parser.add_argument(
         "--capabilities",
@@ -92,7 +98,8 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-async def main() -> None:
+async def main() -> None:  # pylint: disable=too-many-locals,too-many-statements,too-many-branches  # orchestrates full node setup
+    """Start a P2P node with the specified capabilities."""
     args = parse_args()
 
     from src.p2p.types import Capability
@@ -107,7 +114,7 @@ async def main() -> None:
         try:
             capabilities.add(Capability(name))
         except ValueError:
-            logger.error(f"Unknown capability: {name}")
+            logger.error("Unknown capability: %s", name)
             return
 
     # Parse bootstrap peers

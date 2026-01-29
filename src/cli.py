@@ -34,7 +34,7 @@ Anything else is recorded as an observation.
 """
 
 
-async def _print_status(memory: MemoryAPI) -> None:
+async def _print_status(memory: MemoryAPI) -> None:  # pylint: disable=too-many-locals  # status display aggregates many store queries
     """Print a summary of the current graph state."""
     observations = await memory.get_recent_observations(limit=50)
     claims = await memory.get_recent_claims(limit=50)
@@ -79,7 +79,7 @@ async def _print_status(memory: MemoryAPI) -> None:
     print("\n--- End Status ---\n")
 
 
-async def run_cli(
+async def run_cli(  # pylint: disable=too-many-branches,too-many-statements
     memory: MemoryAPI,
     source: str = "cli_user",
     on_action: Any | None = None,
@@ -132,7 +132,7 @@ async def run_cli(
                 if not query:
                     print("Usage: ?<your question>")
                     continue
-                print(f"Thinking...")
+                print("Thinking...")
                 response = await memory.remember(query)
                 print(f"\n{response}\n")
                 if on_action:
@@ -147,6 +147,6 @@ async def run_cli(
         except KeyboardInterrupt:
             print("\nGoodbye.")
             break
-        except Exception:
+        except Exception:  # pylint: disable=broad-exception-caught  # CLI must not crash on transient errors
             logger.exception("CLI error")
             print("Error processing input. Try again.")

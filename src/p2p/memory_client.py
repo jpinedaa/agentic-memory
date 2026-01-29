@@ -1,4 +1,5 @@
 """P2PMemoryClient: MemoryAPI implementation that routes calls through the P2P network."""
+# pylint: disable=protected-access  # memory client is an internal collaborator of PeerNode
 
 from __future__ import annotations
 
@@ -25,34 +26,43 @@ class P2PMemoryClient:
         self._node = node
 
     async def observe(self, text: str, source: str) -> str:
+        """Record an observation via P2P routing."""
         return await self._call("observe", {"text": text, "source": source})
 
     async def claim(self, text: str, source: str) -> str:
+        """Assert a claim via P2P routing."""
         return await self._call("claim", {"text": text, "source": source})
 
     async def remember(self, query: str) -> str:
+        """Query the knowledge graph via P2P routing."""
         return await self._call("remember", {"query": query})
 
     async def infer(self, observation_text: str) -> str | None:
+        """Generate an inference from an observation via P2P routing."""
         return await self._call("infer", {"observation_text": observation_text})
 
     async def get_recent_observations(
         self, limit: int = 10
     ) -> list[dict[str, Any]]:
+        """Return recent observations via P2P routing."""
         return await self._call("get_recent_observations", {"limit": limit})
 
     async def get_recent_claims(self, limit: int = 20) -> list[dict[str, Any]]:
+        """Return recent claims via P2P routing."""
         return await self._call("get_recent_claims", {"limit": limit})
 
     async def get_unresolved_contradictions(
         self,
     ) -> list[tuple[dict[str, Any], dict[str, Any]]]:
+        """Return unresolved contradictions via P2P routing."""
         return await self._call("get_unresolved_contradictions", {})
 
     async def get_entities(self) -> list[dict[str, Any]]:
+        """Return all entities via P2P routing."""
         return await self._call("get_entities", {})
 
     async def clear(self) -> None:
+        """Clear all data via P2P routing."""
         await self._call("clear", {})
 
     async def _call(self, method: str, args: dict[str, Any]) -> Any:

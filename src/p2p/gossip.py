@@ -1,4 +1,5 @@
 """Push-based gossip protocol for propagating peer state."""
+# pylint: disable=protected-access  # gossip is an internal collaborator of PeerNode, not an external consumer
 
 from __future__ import annotations
 
@@ -90,6 +91,6 @@ class GossipProtocol:
             updated = self.node.routing.update_peer(ps)
             if updated:
                 logger.debug(
-                    f"Gossip: updated peer {ps.info.node_id} "
-                    f"(seq={ps.heartbeat_seq}, caps={ps.info.capabilities})"
+                    "Gossip: updated peer %s (seq=%d, caps=%s)",
+                    ps.info.node_id, ps.heartbeat_seq, ps.info.capabilities,
                 )

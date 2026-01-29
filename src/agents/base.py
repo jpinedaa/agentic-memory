@@ -63,13 +63,13 @@ class WorkerAgent(ABC):
     @abstractmethod
     async def process(self) -> list[str]:
         """Check for work and return claim texts to assert."""
-        ...
+        ...  # pylint: disable=unnecessary-ellipsis  # conventional abstract method placeholder
 
     def event_types(self) -> list[str]:
         """Event types this agent is interested in. Override in subclasses."""
         return []
 
-    async def on_network_event(self, event_type: str, data: dict[str, Any]) -> None:
+    async def on_network_event(self, event_type: str, data: dict[str, Any]) -> None:  # pylint: disable=unused-argument  # `data` available for subclass use
         """Called by the P2P node when a relevant network event arrives."""
         if event_type in self.event_types():
             self._event_received.set()
@@ -78,20 +78,21 @@ class WorkerAgent(ABC):
         """Main agent loop. Event-driven with poll fallback."""
         self._running = True
         self._started_at = datetime.utcnow()
-        logger.info(f"Agent {self.source_id} started")
+        logger.info("Agent %s started", self.source_id)
 
         # Retry loop for initial connection
         for attempt in range(1, 13):
             try:
                 await self._tick()
                 break
-            except Exception:
+            except Exception:  # pylint: disable=broad-exception-caught  # retry loop must survive any startup failure
                 logger.warning(
-                    f"Agent {self.source_id} startup attempt {attempt}/12 failed, retrying..."
+                    "Agent %s startup attempt %d/12 failed, retrying...",
+                    self.source_id, attempt,
                 )
                 await asyncio.sleep(5)
         else:
-            logger.error(f"Agent {self.source_id} could not connect after 12 attempts")
+            logger.error("Agent %s could not connect after 12 attempts", self.source_id)
             return
 
         try:
@@ -99,7 +100,7 @@ class WorkerAgent(ABC):
         except asyncio.CancelledError:
             pass
         finally:
-            logger.info(f"Agent {self.source_id} stopped")
+            logger.info("Agent %s stopped", self.source_id)
 
     async def _run_event_driven(self) -> None:
         """Event-driven mode with poll fallback."""
@@ -116,10 +117,10 @@ class WorkerAgent(ABC):
 
                 self._event_received.clear()
                 await self._tick()
-            except asyncio.CancelledError:
+            except asyncio.CancelledError:  # pylint: disable=try-except-raise  # let cancellation propagate; catch-all below is for other errors
                 raise
-            except Exception:
-                logger.exception(f"Agent {self.source_id} error in event loop")
+            except Exception:  # pylint: disable=broad-exception-caught  # keep event loop alive through transient errors
+                logger.exception("Agent %s error in event loop", self.source_id)
                 self._error_count += 1
                 await asyncio.sleep(5)
 
@@ -133,18 +134,18 @@ class WorkerAgent(ABC):
 
             for claim_text in claims:
                 await self.memory.claim(claim_text, source=self.source_id)
-                logger.info(f"Agent {self.source_id} claimed: {claim_text[:100]}")
+                logger.info("Agent %s claimed: %s", self.source_id, claim_text[:100])
                 self._items_processed += 1
 
             if claims:
                 self._last_action = f"Processed {len(claims)} claim(s)"
                 self._last_action_at = datetime.utcnow()
-        except Exception:
-            logger.exception(f"Agent {self.source_id} error in tick")
+        except Exception:  # pylint: disable=broad-exception-caught  # tick must not crash the agent loop
+            logger.exception("Agent %s error in tick", self.source_id)
             self._error_count += 1
 
     def stop(self) -> None:
         """Signal the agent to stop after the current iteration."""
         self._running = False
         self._event_received.set()  # Unblock the wait
-        logger.info(f"Agent {self.source_id} stopping")
+        logger.info("Agent %s stopping", self.source_id)

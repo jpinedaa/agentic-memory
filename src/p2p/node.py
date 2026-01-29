@@ -1,4 +1,5 @@
 """PeerNode: core runtime for a single node in the P2P network."""
+# pylint: disable=import-outside-toplevel  # lazy import breaks circular dependency with transport/ui_bridge
 
 from __future__ import annotations
 
@@ -87,6 +88,7 @@ class PeerNode:
         self._local_services[name] = service
 
     def get_service(self, name: str) -> Any | None:
+        """Get a registered local service by name."""
         return self._local_services.get(name)
 
     def add_event_listener(
@@ -104,8 +106,9 @@ class PeerNode:
         # Start HTTP+WS server
         await self.transport_server.start(self.listen_host, self.listen_port)
         logger.info(
-            f"Node {self.node_id} listening on {self.listen_host}:{self.listen_port} "
-            f"capabilities={sorted(c.value for c in self.capabilities)}"
+            "Node %s listening on %s:%s capabilities=%s",
+            self.node_id, self.listen_host, self.listen_port,
+            sorted(c.value for c in self.capabilities),
         )
 
         # Bootstrap: join known peers
@@ -115,10 +118,11 @@ class PeerNode:
                 for ps in peers:
                     self.routing.update_peer(ps)
                 logger.info(
-                    f"Bootstrapped via {peer_url}, learned {len(peers)} peer(s)"
+                    "Bootstrapped via %s, learned %d peer(s)",
+                    peer_url, len(peers),
                 )
-            except Exception:
-                logger.warning(f"Failed to bootstrap with {peer_url}")
+            except Exception:  # pylint: disable=broad-exception-caught  # bootstrap failure must not prevent node startup
+                logger.warning("Failed to bootstrap with %s", peer_url)
 
         # Connect WebSocket to discovered neighbors
         await self._connect_to_neighbors()
@@ -131,7 +135,8 @@ class PeerNode:
         ]
 
         logger.info(
-            f"Node {self.node_id} started, knows {self.routing.peer_count} peer(s)"
+            "Node %s started, knows %d peer(s)",
+            self.node_id, self.routing.peer_count,
         )
 
     async def stop(self) -> None:
@@ -155,7 +160,7 @@ class PeerNode:
 
         await self.transport_client.close_all()
         await self.transport_server.stop()
-        logger.info(f"Node {self.node_id} stopped")
+        logger.info("Node %s stopped", self.node_id)
 
     # ── Bootstrap ───────────────────────────────────────────────────
 
@@ -187,8 +192,8 @@ class PeerNode:
                 if ps.info.node_id == sender_id:
                     if ps.info.http_url != bootstrap_http:
                         logger.info(
-                            f"Remapping peer {sender_id} URL "
-                            f"{ps.info.http_url} -> {bootstrap_http}"
+                            "Remapping peer %s URL %s -> %s",
+                            sender_id, ps.info.http_url, bootstrap_http,
                         )
                         self._url_overrides[sender_id] = (bootstrap_http, bootstrap_ws)
                         self.apply_url_overrides(ps)
@@ -275,7 +280,7 @@ class PeerNode:
             for node_id in to_remove:
                 self.routing.remove_peer(node_id)
                 await self.transport_client.close_peer(node_id)
-                logger.info(f"Removed dead peer {node_id}")
+                logger.info("Removed dead peer %s", node_id)
 
             # If we lost all peers, re-bootstrap to discover new ones
             if self.routing.peer_count == 0 and self.bootstrap_peers:
@@ -287,12 +292,12 @@ class PeerNode:
                             self.routing.update_peer(ps)
                         if peers:
                             logger.info(
-                                f"Re-bootstrapped via {peer_url}, "
-                                f"learned {len(peers)} peer(s)"
+                                "Re-bootstrapped via %s, learned %d peer(s)",
+                                peer_url, len(peers),
                             )
                             break
-                    except Exception:
-                        logger.debug(f"Re-bootstrap with {peer_url} failed")
+                    except Exception:  # pylint: disable=broad-exception-caught  # re-bootstrap failure must not crash the health check loop
+                        logger.debug("Re-bootstrap with %s failed", peer_url)
 
             # Replace lost neighbors
             await self._connect_to_neighbors()
@@ -322,7 +327,7 @@ class PeerNode:
         if handler:
             return await handler(envelope)
 
-        logger.warning(f"Unknown message type: {envelope.msg_type}")
+        logger.warning("Unknown message type: %s", envelope.msg_type)
         return None
 
     async def _handle_join(self, envelope: Envelope) -> Envelope:
@@ -405,8 +410,8 @@ class PeerNode:
                 reply_to=envelope.msg_id,
                 payload={"result": result, "error": None},
             )
-        except Exception as e:
-            logger.exception(f"Error handling request '{method}'")
+        except Exception as e:  # pylint: disable=broad-exception-caught  # request handler must return an error envelope, not crash
+            logger.exception("Error handling request '%s'", method)
             return Envelope(
                 msg_type="response",
                 sender_id=self.node_id,
@@ -423,7 +428,7 @@ class PeerNode:
         for listener in self._event_listeners:
             try:
                 await listener(event_type, data)
-            except Exception:
+            except Exception:  # pylint: disable=broad-exception-caught  # listener failure must not stop event propagation
                 logger.debug("Error in event listener", exc_info=True)
 
         # Re-broadcast if TTL allows
@@ -445,7 +450,7 @@ class PeerNode:
         """Peer is shutting down gracefully."""
         self.routing.remove_peer(envelope.sender_id)
         await self.transport_client.close_peer(envelope.sender_id)
-        logger.info(f"Peer {envelope.sender_id} left the network")
+        logger.info("Peer %s left the network", envelope.sender_id)
         return None
 
     # ── Event Broadcasting ──────────────────────────────────────────
@@ -456,7 +461,7 @@ class PeerNode:
         for listener in self._event_listeners:
             try:
                 await listener(event_type, data)
-            except Exception:
+            except Exception:  # pylint: disable=broad-exception-caught  # listener failure must not stop event propagation
                 logger.debug("Error in event listener", exc_info=True)
 
         envelope = Envelope(

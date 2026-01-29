@@ -7,9 +7,8 @@ Prompts are loaded from YAML templates in prompts/ directory.
 
 from __future__ import annotations
 
-import json
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import anthropic
 
@@ -136,8 +135,8 @@ class LLMTranslator:
     async def extract_observation(self, text: str) -> ObservationData:
         """Extract structured data from observation text using tool_use."""
         prompt = self._prompt_loader.load("llm_translator/observation")
-        vars = ObservationVars(observation_text=text)
-        rendered = prompt.render(vars)
+        tpl_vars = ObservationVars(observation_text=text)
+        rendered = prompt.render(tpl_vars)
 
         response = await self._client.messages.create(
             model=self._model,
@@ -161,8 +160,8 @@ class LLMTranslator:
     ) -> ClaimData:
         """Parse a claim text into structured data using tool_use."""
         prompt = self._prompt_loader.load("llm_translator/claim")
-        vars = ClaimVars(claim_text=text, context=context or [])
-        rendered = prompt.render(vars)
+        tpl_vars = ClaimVars(claim_text=text, context=context or [])
+        rendered = prompt.render(tpl_vars)
 
         response = await self._client.messages.create(
             model=self._model,
@@ -191,8 +190,8 @@ class LLMTranslator:
     async def generate_query(self, text: str) -> str:
         """Translate a natural language question into a Cypher query."""
         prompt = self._prompt_loader.load("llm_translator/query_generation")
-        vars = QueryGenerationVars(query=text)
-        rendered = prompt.render(vars)
+        tpl_vars = QueryGenerationVars(query=text)
+        rendered = prompt.render(tpl_vars)
 
         response = await self._client.messages.create(
             model=self._model,
@@ -213,8 +212,8 @@ class LLMTranslator:
     ) -> str:
         """Turn graph query results into a natural language response."""
         prompt = self._prompt_loader.load("llm_translator/synthesis")
-        vars = SynthesisVars(query=query, results=results)
-        rendered = prompt.render(vars)
+        tpl_vars = SynthesisVars(query=query, results=results)
+        rendered = prompt.render(tpl_vars)
 
         response = await self._client.messages.create(
             model=self._model,
