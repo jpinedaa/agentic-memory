@@ -2,6 +2,7 @@ import { useEffect, useRef, useCallback, useState } from 'react';
 import type { WSMessage } from '../types';
 import { useAgentStore } from '../stores/agentStore';
 import { useEventStore } from '../stores/eventStore';
+import { useGraphStore } from '../stores/graphStore';
 
 const RECONNECT_DELAY = 3000;
 
@@ -12,6 +13,7 @@ export function useWebSocket(url: string) {
 
   const { setAgent, setAgents, removeAgent } = useAgentStore();
   const { addEvent } = useEventStore();
+  const { triggerRefresh } = useGraphStore();
 
   const connect = useCallback(() => {
     if (wsRef.current?.readyState === WebSocket.OPEN) return;
@@ -70,12 +72,14 @@ export function useWebSocket(url: string) {
             raw_content: msg.data.raw_content,
             text: msg.data.text,
           });
+          // Trigger graph refresh when new data arrives
+          triggerRefresh();
           break;
         case 'pong':
           break;
       }
     },
-    [setAgent, setAgents, removeAgent, addEvent]
+    [setAgent, setAgents, removeAgent, addEvent, triggerRefresh]
   );
 
   const send = useCallback((data: Record<string, unknown>) => {

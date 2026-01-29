@@ -20,13 +20,76 @@ interface Props {
   onToggleMaximize?: () => void;
 }
 
+type SimNode = GraphNode & d3.SimulationNodeDatum;
+
+interface SimLink extends d3.SimulationLinkDatum<SimNode> {
+  id: string;
+}
+
+function Legend() {
+  return (
+    <div
+      style={{
+        position: 'absolute',
+        bottom: 8,
+        left: 8,
+        background: 'var(--bg-tertiary)',
+        border: '1px solid var(--border)',
+        borderRadius: '6px',
+        padding: '8px 10px',
+        fontSize: '9px',
+        lineHeight: '16px',
+        color: 'var(--text-secondary)',
+        pointerEvents: 'none',
+        zIndex: 10,
+        display: 'flex',
+        flexDirection: 'column',
+        gap: '3px',
+      }}
+    >
+      <div style={{ fontWeight: 600, fontSize: '10px', marginBottom: '2px', color: 'var(--text-primary)' }}>
+        Node Types
+      </div>
+      {Object.entries(NODE_COLORS).map(([type, color]) => (
+        <div key={type} style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+          <span
+            style={{
+              width: NODE_RADIUS[type] ? NODE_RADIUS[type] * 0.8 : 6,
+              height: NODE_RADIUS[type] ? NODE_RADIUS[type] * 0.8 : 6,
+              borderRadius: '50%',
+              background: color,
+              flexShrink: 0,
+            }}
+          />
+          {type}
+        </div>
+      ))}
+      <div style={{ fontWeight: 600, fontSize: '10px', marginTop: '4px', marginBottom: '2px', color: 'var(--text-primary)' }}>
+        Interactions
+      </div>
+      <div>Scroll to zoom</div>
+      <div>Drag background to pan</div>
+      <div>Drag node to reposition</div>
+      <div>Hover node for details</div>
+    </div>
+  );
+}
+
 export function GraphView({ maximized, onToggleMaximize }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
-  const zoomTransformRef = useRef<d3.ZoomTransform>(d3.zoomIdentity);
-  const { nodes, setNodes } = useGraphStore();
+  const { nodes, setNodes, refreshCounter } = useGraphStore();
   const [loading, setLoading] = useState(false);
   const [dimensions, setDimensions] = useState({ width: 0, height: 0 });
+  const [fetchError, setFetchError] = useState(false);
+
+  // Persistent D3 refs
+  const simulationRef = useRef<d3.Simulation<SimNode, SimLink> | null>(null);
+  const gRef = useRef<d3.Selection<SVGGElement, unknown, null, undefined> | null>(null);
+  const zoomTransformRef = useRef<d3.ZoomTransform>(d3.zoomIdentity);
+  const tooltipRef = useRef<d3.Selection<HTMLDivElement, unknown, null, undefined> | null>(null);
+  const simNodesRef = useRef<SimNode[]>([]);
+  const initializedRef = useRef(false);
 
   // Track container size
   useEffect(() => {
@@ -48,25 +111,40 @@ export function GraphView({ maximized, onToggleMaximize }: Props) {
 
   const fetchGraphData = useCallback(async () => {
     setLoading(true);
+    setFetchError(false);
     try {
       const res = await fetch('/v1/graph/nodes?limit=200');
       if (res.ok) {
         const data = await res.json();
         setNodes(data.nodes);
+      } else {
+        setFetchError(true);
       }
     } catch (e) {
       console.error('Failed to fetch graph data:', e);
+      setFetchError(true);
     } finally {
       setLoading(false);
     }
   }, [setNodes]);
 
+  // Fetch on mount
   useEffect(() => {
     fetchGraphData();
   }, [fetchGraphData]);
 
+  // Re-fetch when memory events arrive (debounced via refreshCounter)
   useEffect(() => {
-    if (!svgRef.current || nodes.length === 0 || dimensions.width === 0 || dimensions.height === 0) return;
+    if (refreshCounter === 0) return; // skip initial
+    // Small delay to let the server process the event
+    const timer = setTimeout(fetchGraphData, 1500);
+    return () => clearTimeout(timer);
+  }, [refreshCounter, fetchGraphData]);
+
+  // One-time D3 setup
+  useEffect(() => {
+    if (!svgRef.current || dimensions.width === 0 || dimensions.height === 0) return;
+    if (initializedRef.current) return;
 
     const { width, height } = dimensions;
     const svg = d3.select(svgRef.current);
@@ -83,6 +161,10 @@ export function GraphView({ maximized, onToggleMaximize }: Props) {
     feMerge.append('feMergeNode').attr('in', 'SourceGraphic');
 
     const g = svg.append('g');
+    gRef.current = g;
+
+    g.append('g').attr('class', 'links-group');
+    g.append('g').attr('class', 'nodes-group');
 
     // Zoom + pan
     const zoom = d3.zoom<SVGSVGElement, unknown>()
@@ -93,46 +175,113 @@ export function GraphView({ maximized, onToggleMaximize }: Props) {
       });
     svg.call(zoom);
 
-    // Restore previous zoom transform
-    if (zoomTransformRef.current !== d3.zoomIdentity) {
-      svg.call(zoom.transform, zoomTransformRef.current);
-    }
+    // Tooltip
+    tooltipRef.current = d3
+      .select(containerRef.current!)
+      .append('div')
+      .attr('class', 'tooltip')
+      .style('display', 'none');
 
-    // Simulation nodes (copy to avoid mutating store)
-    const simNodes: (GraphNode & d3.SimulationNodeDatum)[] = nodes.map((n) => ({ ...n }));
-
-    interface SimLink extends d3.SimulationLinkDatum<GraphNode & d3.SimulationNodeDatum> {
-      id: string;
-    }
-    const simLinks: SimLink[] = [];
-
+    // Simulation
     const simulation = d3
-      .forceSimulation(simNodes)
-      .force('link', d3.forceLink<GraphNode & d3.SimulationNodeDatum, SimLink>(simLinks).id((d) => d.id).distance(60))
+      .forceSimulation<SimNode>([])
+      .force('link', d3.forceLink<SimNode, SimLink>([]).id((d) => d.id).distance(60))
       .force('charge', d3.forceManyBody().strength(-80))
       .force('center', d3.forceCenter(width / 2, height / 2))
       .force('collision', d3.forceCollide().radius(20));
 
-    // Links
-    const link = g
-      .append('g')
-      .selectAll('line')
-      .data(simLinks)
-      .join('line')
+    simulationRef.current = simulation;
+    initializedRef.current = true;
+
+    return () => {
+      simulation.stop();
+      tooltipRef.current?.remove();
+      initializedRef.current = false;
+      simulationRef.current = null;
+      gRef.current = null;
+    };
+  }, [dimensions]);
+
+  // Update data when nodes change — D3 data join, no teardown
+  useEffect(() => {
+    const simulation = simulationRef.current;
+    const g = gRef.current;
+    const tooltip = tooltipRef.current;
+    if (!simulation || !g || !tooltip || nodes.length === 0 || dimensions.width === 0) return;
+
+    // Preserve existing positions
+    const existingPositions = new Map<string, { x: number; y: number }>();
+    for (const n of simNodesRef.current) {
+      if (n.x != null && n.y != null) {
+        existingPositions.set(n.id, { x: n.x, y: n.y });
+      }
+    }
+
+    const simNodes: SimNode[] = nodes.map((n) => ({
+      ...n,
+      ...(existingPositions.get(n.id) || {}),
+    }));
+    simNodesRef.current = simNodes;
+
+    // No links for now (could be added from graph edges)
+    const simLinks: SimLink[] = [];
+
+    // Update simulation
+    simulation.nodes(simNodes);
+    const linkForce = simulation.force('link') as d3.ForceLink<SimNode, SimLink>;
+    linkForce.links(simLinks);
+
+    // -- Links data join --
+    const linksGroup = g.select<SVGGElement>('.links-group');
+    const link = linksGroup
+      .selectAll<SVGLineElement, SimLink>('line')
+      .data(simLinks, (d) => d.id);
+    link.exit().remove();
+    const linkEnter = link.enter()
+      .append('line')
       .attr('stroke', 'var(--edge-default)')
       .attr('stroke-width', 1);
+    const linkMerged = linkEnter.merge(link);
 
-    // Nodes
-    const node = g
+    // -- Nodes data join --
+    const nodesGroup = g.select<SVGGElement>('.nodes-group');
+    const node = nodesGroup
+      .selectAll<SVGGElement, SimNode>('g.graph-node')
+      .data(simNodes, (d) => d.id);
+
+    node.exit().remove();
+
+    const nodeEnter = node.enter()
       .append('g')
-      .selectAll<SVGGElement, GraphNode & d3.SimulationNodeDatum>('g')
-      .data(simNodes)
-      .join('g')
+      .attr('class', 'graph-node')
       .attr('cursor', 'grab');
 
+    // Circle
+    nodeEnter.append('circle')
+      .attr('r', (d) => NODE_RADIUS[d.type] || 8)
+      .attr('fill', (d) => NODE_COLORS[d.type] || '#8b949e')
+      .attr('opacity', 0.85)
+      .style('filter', 'url(#graph-glow)');
+
+    // Labels for entities
+    nodeEnter.filter((d) => d.type === 'Entity')
+      .append('text')
+      .attr('text-anchor', 'middle')
+      .attr('dy', -16)
+      .attr('fill', 'var(--text-primary)')
+      .attr('font-size', '10px')
+      .attr('font-weight', '500')
+      .attr('pointer-events', 'none')
+      .text((d) => {
+        const name = (d.data as Record<string, string>).name || '';
+        return name.length > 12 ? name.slice(0, 12) + '...' : name;
+      });
+
+    const nodeMerged = nodeEnter.merge(node);
+
     // Drag
-    node.call(
-      d3.drag<SVGGElement, GraphNode & d3.SimulationNodeDatum>()
+    nodeMerged.call(
+      d3.drag<SVGGElement, SimNode>()
         .on('start', (event, d) => {
           if (!event.active) simulation.alphaTarget(0.3).restart();
           d.fx = d.x;
@@ -149,37 +298,8 @@ export function GraphView({ maximized, onToggleMaximize }: Props) {
         })
     );
 
-    // Circles
-    node
-      .append('circle')
-      .attr('r', (d) => NODE_RADIUS[d.type] || 8)
-      .attr('fill', (d) => NODE_COLORS[d.type] || '#8b949e')
-      .attr('opacity', 0.85)
-      .style('filter', 'url(#graph-glow)');
-
-    // Labels for entities
-    node
-      .filter((d) => d.type === 'Entity')
-      .append('text')
-      .text((d) => {
-        const name = (d.data as Record<string, string>).name || '';
-        return name.length > 12 ? name.slice(0, 12) + '...' : name;
-      })
-      .attr('text-anchor', 'middle')
-      .attr('dy', -16)
-      .attr('fill', 'var(--text-primary)')
-      .attr('font-size', '10px')
-      .attr('font-weight', '500')
-      .attr('pointer-events', 'none');
-
     // Tooltip
-    const tooltip = d3
-      .select(containerRef.current!)
-      .append('div')
-      .attr('class', 'tooltip')
-      .style('display', 'none');
-
-    node
+    nodeMerged
       .on('mouseover', (_event, d) => {
         const data = d.data as Record<string, string>;
         let html = `<div class="label">${d.type}</div>`;
@@ -197,21 +317,26 @@ export function GraphView({ maximized, onToggleMaximize }: Props) {
         tooltip.style('display', 'none');
       });
 
+    // Tick
     simulation.on('tick', () => {
-      link
+      linkMerged
         .attr('x1', (d) => ((d.source as unknown as { x: number }).x ?? 0))
         .attr('y1', (d) => ((d.source as unknown as { y: number }).y ?? 0))
         .attr('x2', (d) => ((d.target as unknown as { x: number }).x ?? 0))
         .attr('y2', (d) => ((d.target as unknown as { y: number }).y ?? 0));
 
-      node.attr('transform', (d) => `translate(${d.x ?? 0},${d.y ?? 0})`);
+      nodeMerged.attr('transform', (d) => `translate(${d.x ?? 0},${d.y ?? 0})`);
     });
 
-    return () => {
-      simulation.stop();
-      tooltip.remove();
-    };
+    simulation.alpha(0.3).restart();
   }, [nodes, dimensions]);
+
+  // Update SVG size
+  useEffect(() => {
+    if (!svgRef.current || dimensions.width === 0) return;
+    const svg = d3.select(svgRef.current);
+    svg.attr('width', dimensions.width).attr('height', dimensions.height);
+  }, [dimensions]);
 
   return (
     <div className="panel">
@@ -232,7 +357,7 @@ export function GraphView({ maximized, onToggleMaximize }: Props) {
         </div>
       </div>
       <div ref={containerRef} className="panel-body" style={{ padding: 0, position: 'relative' }}>
-        {loading ? (
+        {loading && nodes.length === 0 ? (
           <div
             style={{
               display: 'flex',
@@ -243,6 +368,24 @@ export function GraphView({ maximized, onToggleMaximize }: Props) {
             }}
           >
             Loading graph...
+          </div>
+        ) : fetchError && nodes.length === 0 ? (
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              height: '100%',
+              color: 'var(--text-muted)',
+              fontSize: '13px',
+              flexDirection: 'column',
+              gap: '8px',
+            }}
+          >
+            <span>Failed to load graph data</span>
+            <button className="panel-btn" onClick={fetchGraphData} style={{ width: 'auto', padding: '4px 12px', fontSize: '11px' }}>
+              Retry
+            </button>
           </div>
         ) : nodes.length === 0 ? (
           <div
@@ -255,10 +398,13 @@ export function GraphView({ maximized, onToggleMaximize }: Props) {
               fontSize: '13px',
             }}
           >
-            No graph data yet
+            No graph data yet &mdash; make an observation to get started
           </div>
         ) : (
-          <svg ref={svgRef} style={{ display: 'block', position: 'absolute', inset: 0 }} />
+          <>
+            <svg ref={svgRef} style={{ display: 'block', position: 'absolute', inset: 0 }} />
+            <Legend />
+          </>
         )}
       </div>
     </div>
