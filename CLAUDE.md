@@ -4,9 +4,9 @@
 
 This is a shared memory substrate where multiple AI agents interact via natural language, with a Neo4j graph database storing knowledge as triples (observations, claims, entities). The system uses a peer-to-peer architecture (v0.3) where every node is identical in networking (HTTP server + WebSocket + HTTP client) and differs only in capabilities (store, LLM, inference, validation, CLI). Nodes discover each other via seed URLs, maintain WebSocket neighbor connections, and propagate state via gossip. No centralized API server or Redis — all coordination is peer-to-peer.
 
-**Just completed:** Replaced the centralized FastAPI + Redis architecture (v0.2) with a P2P protocol layer. Each node runs its own HTTP+WS server, discovers peers via bootstrap, and routes MemoryAPI calls to capable peers. Gossip protocol propagates peer state. Event broadcasting replaces Redis pub/sub. A real-time React + D3.js dashboard (port 3000) visualizes the system.
+**Just completed:** Built the UI bridge layer (`src/p2p/ui_bridge.py`) that translates P2P network state into `/v1/` endpoints the React frontend expects. Fixed cross-network connectivity (bootstrap URL remapping for Docker ↔ localhost). Added auto-reconnect when all peers die. Enhanced the UI with a status sidebar in Agent Topology showing per-node-type stats, knowledge counts, and network metrics. Fixed D3 knowledge graph rendering and event stream forwarding.
 
-**Next up:** Add tests for `src/p2p/` modules. Reconnect the UI dashboard to the P2P topology. See `docs/visual_ui_design.md` for UI design decisions.
+**Next up:** Multi-node integration tests, NAT traversal, TLS. See `docs/visual_ui_design.md` for UI design decisions.
 
 ## Project Overview
 
@@ -83,6 +83,7 @@ pytest                            # all tests (needs Neo4j + API key)
 | `NODE_PORT` | `9000` | Node listen port |
 | `NODE_HOST` | `0.0.0.0` | Node bind host |
 | `BOOTSTRAP_PEERS` | (none) | Comma-separated bootstrap peer URLs |
+| `ADVERTISE_HOST` | (listen host) | Hostname other nodes use to reach this node (for Docker/k8s) |
 | `POLL_INTERVAL` | `30` | Agent poll fallback interval (seconds) |
 
 ## Architecture
@@ -96,6 +97,7 @@ src/p2p/gossip.py        → GossipProtocol (push-based, fanout to neighbors)
 src/p2p/node.py          → PeerNode (core runtime, lifecycle, dispatch)
 src/p2p/memory_client.py → P2PMemoryClient (implements MemoryAPI via peer routing)
 src/p2p/local_state.py   → LocalAgentState (replaces Redis AgentState)
+src/p2p/ui_bridge.py     → UI bridge (translates P2P state to /v1/ endpoints for React UI)
 src/memory_protocol.py   → MemoryAPI protocol (shared contract)
 src/interfaces.py        → MemoryService (in-process implementation)
 src/llm.py               → Claude API translation layer (tool_use)
@@ -156,7 +158,8 @@ Never run Python commands directly without the venv activated.
 - **WebSocket** `/p2p/ws` — persistent bidirectional for gossip + events
 - **GET** `/p2p/health` — liveness check
 - **Gossip** — push-based, every 5s, fanout to 3 random neighbors
-- **Events** — flooded to neighbors with TTL-based hop limit + msg_id dedup
+- **Events** — flooded to neighbors with TTL-based hop limit + msg_id dedup + local listener notification
+- **UI Bridge** — `/v1/ws`, `/v1/graph/nodes`, `/v1/stats` endpoints on store node for React UI
 
 ### Message Types
 

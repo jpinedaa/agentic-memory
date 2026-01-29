@@ -33,7 +33,7 @@ export interface MemoryEvent {
 // Graph nodes for visualization
 export interface GraphNode {
   id: string;
-  type: 'Observation' | 'Claim' | 'Entity';
+  type: string;
   data: Record<string, unknown>;
   // D3 simulation fields
   x?: number;
@@ -58,7 +58,30 @@ export type WSMessage =
   | { type: 'snapshot'; data: { agents: AgentStatus[] } }
   | { type: 'pong' };
 
+// Node info within a node-type group
+export interface NodeInfo {
+  agent_id: string;
+  status: string;
+  uptime_seconds: number;
+  capabilities: string[];
+}
+
 export interface SystemStats {
+  network: {
+    total_nodes: number;
+    active_nodes: number;
+    websocket_clients: number;
+    nodes_by_type: Record<string, number>;
+  };
+  knowledge: {
+    observations: number;
+    claims: number;
+    entities: number;
+    triples: number;
+    relationships: number;
+  };
+  nodes: Record<string, NodeInfo[]>;
+  // Legacy fields
   total_agents: number;
   active_agents: number;
   total_observations: number;

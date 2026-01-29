@@ -277,6 +277,23 @@ class PeerNode:
                 await self.transport_client.close_peer(node_id)
                 logger.info(f"Removed dead peer {node_id}")
 
+            # If we lost all peers, re-bootstrap to discover new ones
+            if self.routing.peer_count == 0 and self.bootstrap_peers:
+                logger.info("No peers remaining, re-bootstrapping...")
+                for peer_url in self.bootstrap_peers:
+                    try:
+                        peers = await self._join_peer(peer_url)
+                        for ps in peers:
+                            self.routing.update_peer(ps)
+                        if peers:
+                            logger.info(
+                                f"Re-bootstrapped via {peer_url}, "
+                                f"learned {len(peers)} peer(s)"
+                            )
+                            break
+                    except Exception:
+                        logger.debug(f"Re-bootstrap with {peer_url} failed")
+
             # Replace lost neighbors
             await self._connect_to_neighbors()
 
@@ -434,7 +451,14 @@ class PeerNode:
     # ── Event Broadcasting ──────────────────────────────────────────
 
     async def _broadcast_event(self, event_type: str, data: dict[str, Any]) -> None:
-        """Broadcast a memory event to the network."""
+        """Broadcast a memory event to the network and local listeners."""
+        # Notify local listeners (e.g. UI bridge on the store node)
+        for listener in self._event_listeners:
+            try:
+                await listener(event_type, data)
+            except Exception:
+                logger.debug("Error in event listener", exc_info=True)
+
         envelope = Envelope(
             msg_type="event",
             sender_id=self.node_id,

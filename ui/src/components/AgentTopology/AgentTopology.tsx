@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import * as d3 from 'd3';
 import { useAgentStore } from '../../stores/agentStore';
-import type { AgentStatus } from '../../types';
+import type { AgentStatus, SystemStats } from '../../types';
 
 const AGENT_COLORS: Record<string, string> = {
   inference: '#58a6ff',
@@ -20,6 +20,13 @@ const STATUS_COLORS: Record<string, string> = {
   stopping: '#d29922',
 };
 
+const TYPE_LABELS: Record<string, string> = {
+  store: 'Store',
+  inference: 'Inference',
+  validation: 'Validator',
+  cli: 'CLI',
+};
+
 interface NodeDatum extends d3.SimulationNodeDatum {
   id: string;
   type: string;
@@ -35,61 +42,177 @@ interface Props {
   onToggleMaximize?: () => void;
 }
 
-function Legend() {
+function formatUptime(seconds: number): string {
+  if (seconds < 60) return `${Math.floor(seconds)}s`;
+  if (seconds < 3600) {
+    const m = Math.floor(seconds / 60);
+    const s = Math.floor(seconds % 60);
+    return `${m}m ${s}s`;
+  }
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  return `${h}h ${m}m`;
+}
+
+function NodeStatusSidebar({ agents, stats }: { agents: AgentStatus[]; stats: SystemStats | null }) {
+  // Group agents by type
+  const groups: Record<string, AgentStatus[]> = {};
+  for (const a of agents) {
+    const t = a.agent_type;
+    if (!groups[t]) groups[t] = [];
+    groups[t].push(a);
+  }
+
+  // Sort groups by priority
+  const typeOrder = ['store', 'inference', 'validation', 'cli'];
+  const sortedTypes = Object.keys(groups).sort(
+    (a, b) => (typeOrder.indexOf(a) === -1 ? 99 : typeOrder.indexOf(a)) -
+              (typeOrder.indexOf(b) === -1 ? 99 : typeOrder.indexOf(b))
+  );
+
   return (
     <div
       style={{
-        position: 'absolute',
-        bottom: 8,
-        left: 8,
-        background: 'var(--bg-tertiary)',
-        border: '1px solid var(--border)',
-        borderRadius: '6px',
-        padding: '8px 10px',
-        fontSize: '9px',
-        lineHeight: '16px',
-        color: 'var(--text-secondary)',
-        pointerEvents: 'none',
-        zIndex: 10,
-        display: 'flex',
-        flexDirection: 'column',
-        gap: '3px',
+        width: '210px',
+        flexShrink: 0,
+        borderLeft: '1px solid var(--border)',
+        overflowY: 'auto',
+        fontSize: '11px',
+        background: 'var(--bg-secondary)',
       }}
     >
-      <div style={{ fontWeight: 600, fontSize: '10px', marginBottom: '2px', color: 'var(--text-primary)' }}>
-        Node Types
+      {/* General section */}
+      <SectionHeader title="Network" />
+      <div style={{ padding: '6px 10px 10px' }}>
+        <StatRow label="Total nodes" value={agents.length.toString()} />
+        <StatRow
+          label="Active"
+          value={agents.filter((a) => a.status === 'running').length.toString()}
+          color="var(--status-running)"
+        />
+        {stats?.network && (
+          <StatRow label="WS clients" value={stats.network.websocket_clients.toString()} />
+        )}
       </div>
-      {Object.entries(AGENT_COLORS).filter(([k]) => k !== 'unknown').map(([type, color]) => (
-        <div key={type} style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
-          <span style={{ width: 8, height: 8, borderRadius: '50%', background: color, flexShrink: 0 }} />
-          {type}
-        </div>
-      ))}
-      <div style={{ fontWeight: 600, fontSize: '10px', marginTop: '4px', marginBottom: '2px', color: 'var(--text-primary)' }}>
-        Status
+
+      {/* Knowledge section */}
+      {stats?.knowledge && (
+        <>
+          <SectionHeader title="Knowledge" />
+          <div style={{ padding: '6px 10px 10px' }}>
+            <StatRow label="Observations" value={stats.knowledge.observations.toString()} />
+            <StatRow label="Claims" value={stats.knowledge.claims.toString()} />
+            <StatRow label="Entities" value={stats.knowledge.entities.toString()} />
+            <StatRow label="Triples" value={stats.knowledge.triples.toString()} />
+            <StatRow label="Relationships" value={stats.knowledge.relationships.toString()} />
+          </div>
+        </>
+      )}
+
+      {/* Per-type sections */}
+      {sortedTypes.map((type) => {
+        const typeAgents = groups[type];
+        const color = AGENT_COLORS[type] || AGENT_COLORS.unknown;
+        const label = TYPE_LABELS[type] || type;
+
+        return (
+          <div key={type}>
+            <SectionHeader title={label} color={color} count={typeAgents.length} />
+            <div style={{ padding: '4px 10px 8px' }}>
+              {typeAgents.map((a) => (
+                <NodeCard key={a.agent_id} agent={a} />
+              ))}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function SectionHeader({ title, color, count }: { title: string; color?: string; count?: number }) {
+  return (
+    <div
+      style={{
+        padding: '6px 10px 4px',
+        fontSize: '9px',
+        fontWeight: 700,
+        textTransform: 'uppercase',
+        letterSpacing: '0.5px',
+        color: 'var(--text-muted)',
+        borderBottom: '1px solid var(--border)',
+        display: 'flex',
+        alignItems: 'center',
+        gap: '6px',
+      }}
+    >
+      {color && (
+        <span style={{ width: 6, height: 6, borderRadius: '50%', background: color, flexShrink: 0 }} />
+      )}
+      {title}
+      {count !== undefined && (
+        <span style={{ marginLeft: 'auto', color: 'var(--text-secondary)', fontWeight: 400 }}>{count}</span>
+      )}
+    </div>
+  );
+}
+
+function NodeCard({ agent }: { agent: AgentStatus }) {
+  const statusColor = STATUS_COLORS[agent.status] || STATUS_COLORS.running;
+  const shortId = agent.agent_id.split('-').pop() || agent.agent_id;
+
+  return (
+    <div
+      style={{
+        padding: '5px 0',
+        borderBottom: '1px solid var(--border)',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: '2px',
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+        <span
+          style={{
+            width: 5,
+            height: 5,
+            borderRadius: '50%',
+            background: statusColor,
+            boxShadow: agent.status === 'running' ? `0 0 4px ${statusColor}` : 'none',
+            flexShrink: 0,
+          }}
+        />
+        <span style={{ fontWeight: 600, color: 'var(--text-primary)', fontSize: '10px' }}>
+          {shortId}
+        </span>
+        <span
+          style={{
+            marginLeft: 'auto',
+            fontSize: '9px',
+            color: statusColor,
+            fontWeight: 500,
+          }}
+        >
+          {agent.status}
+        </span>
       </div>
-      {Object.entries(STATUS_COLORS).map(([status, color]) => (
-        <div key={status} style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
-          <span
-            style={{
-              width: 8,
-              height: 8,
-              borderRadius: '50%',
-              border: `2px solid ${color}`,
-              background: 'transparent',
-              flexShrink: 0,
-            }}
-          />
-          {status}
-        </div>
-      ))}
-      <div style={{ fontWeight: 600, fontSize: '10px', marginTop: '4px', marginBottom: '2px', color: 'var(--text-primary)' }}>
-        Interactions
+      <div style={{ paddingLeft: '10px', color: 'var(--text-secondary)', fontSize: '10px' }}>
+        <span>up {formatUptime(agent.uptime_seconds)}</span>
+        {agent.tags && agent.tags.length > 1 && (
+          <span style={{ marginLeft: '8px', color: 'var(--text-muted)' }}>
+            [{agent.tags.join(', ')}]
+          </span>
+        )}
       </div>
-      <div>Scroll to zoom</div>
-      <div>Drag background to pan</div>
-      <div>Drag node to reposition</div>
-      <div>Hover node for details</div>
+    </div>
+  );
+}
+
+function StatRow({ label, value, color }: { label: string; value: string; color?: string }) {
+  return (
+    <div style={{ display: 'flex', justifyContent: 'space-between', padding: '1px 0' }}>
+      <span style={{ color: 'var(--text-secondary)' }}>{label}</span>
+      <span style={{ fontWeight: 600, color: color || 'var(--text-primary)' }}>{value}</span>
     </div>
   );
 }
@@ -99,6 +222,7 @@ export function AgentTopology({ maximized, onToggleMaximize }: Props) {
   const svgRef = useRef<SVGSVGElement>(null);
   const agents = useAgentStore((s) => Array.from(s.agents.values()));
   const [dimensions, setDimensions] = useState({ width: 0, height: 0 });
+  const [stats, setStats] = useState<SystemStats | null>(null);
 
   // Persistent refs for D3 objects that survive re-renders
   const simulationRef = useRef<d3.Simulation<NodeDatum, LinkDatum> | null>(null);
@@ -109,6 +233,21 @@ export function AgentTopology({ maximized, onToggleMaximize }: Props) {
   const nodesRef = useRef<NodeDatum[]>([]);
   const linksRef = useRef<LinkDatum[]>([]);
   const initializedRef = useRef(false);
+
+  // Fetch stats for sidebar
+  useEffect(() => {
+    const fetchStats = async () => {
+      try {
+        const res = await fetch('/v1/stats');
+        if (res.ok) setStats(await res.json());
+      } catch {
+        // API not available
+      }
+    };
+    fetchStats();
+    const interval = setInterval(fetchStats, 10000);
+    return () => clearInterval(interval);
+  }, []);
 
   // Track container size
   useEffect(() => {
@@ -128,10 +267,10 @@ export function AgentTopology({ maximized, onToggleMaximize }: Props) {
     return () => observer.disconnect();
   }, []);
 
-  // One-time D3 setup: create SVG structure, zoom, defs
+  // One-time D3 setup
   useEffect(() => {
     if (!svgRef.current || dimensions.width === 0 || dimensions.height === 0) return;
-    if (initializedRef.current) return; // already set up
+    if (initializedRef.current) return;
 
     const { width, height } = dimensions;
     const svg = d3.select(svgRef.current);
@@ -139,7 +278,6 @@ export function AgentTopology({ maximized, onToggleMaximize }: Props) {
     svg.selectAll('*').remove();
     svg.attr('width', width).attr('height', height);
 
-    // Defs for glow effects
     const defs = svg.append('defs');
     const filter = defs.append('filter').attr('id', 'glow');
     filter.append('feGaussianBlur').attr('stdDeviation', '3').attr('result', 'coloredBlur');
@@ -147,15 +285,12 @@ export function AgentTopology({ maximized, onToggleMaximize }: Props) {
     feMerge.append('feMergeNode').attr('in', 'coloredBlur');
     feMerge.append('feMergeNode').attr('in', 'SourceGraphic');
 
-    // Main group (zoom/pan target)
     const g = svg.append('g');
     gRef.current = g;
 
-    // Groups for links and nodes
     g.append('g').attr('class', 'links-group');
     g.append('g').attr('class', 'nodes-group');
 
-    // Zoom + pan
     const zoom = d3.zoom<SVGSVGElement, unknown>()
       .scaleExtent([0.3, 5])
       .on('zoom', (event) => {
@@ -165,14 +300,12 @@ export function AgentTopology({ maximized, onToggleMaximize }: Props) {
     zoomRef.current = zoom;
     svg.call(zoom);
 
-    // Tooltip
     tooltipRef.current = d3
       .select(containerRef.current!)
       .append('div')
       .attr('class', 'tooltip')
       .style('display', 'none');
 
-    // Simulation — P2P mesh layout
     const simulation = d3
       .forceSimulation<NodeDatum>([])
       .force('link', d3.forceLink<NodeDatum, LinkDatum>([]).id((d) => d.id).distance(120))
@@ -192,14 +325,13 @@ export function AgentTopology({ maximized, onToggleMaximize }: Props) {
     };
   }, [dimensions]);
 
-  // Update data when agents change — no teardown, just update D3 data joins
+  // Update data when agents change
   useEffect(() => {
     const simulation = simulationRef.current;
     const g = gRef.current;
     const tooltip = tooltipRef.current;
     if (!simulation || !g || !tooltip || dimensions.width === 0) return;
 
-    // Build new node/link data, preserving positions of existing nodes
     const existingPositions = new Map<string, { x: number; y: number; fx?: number | null; fy?: number | null }>();
     for (const n of nodesRef.current) {
       if (n.x != null && n.y != null) {
@@ -207,7 +339,6 @@ export function AgentTopology({ maximized, onToggleMaximize }: Props) {
       }
     }
 
-    // All agents are equal peers in the P2P network
     const newNodes: NodeDatum[] = agents.map((a) => {
       const existing = existingPositions.get(a.agent_id);
       return {
@@ -218,7 +349,6 @@ export function AgentTopology({ maximized, onToggleMaximize }: Props) {
       };
     });
 
-    // Full mesh: every peer connects to every other peer (gossip protocol)
     const newLinks: LinkDatum[] = [];
     for (let i = 0; i < newNodes.length; i++) {
       for (let j = i + 1; j < newNodes.length; j++) {
@@ -233,28 +363,23 @@ export function AgentTopology({ maximized, onToggleMaximize }: Props) {
     nodesRef.current = newNodes;
     linksRef.current = newLinks;
 
-    // Update simulation
     simulation.nodes(newNodes);
     const linkForce = simulation.force('link') as d3.ForceLink<NodeDatum, LinkDatum>;
     linkForce.links(newLinks);
 
-    // -- Data join: links --
     const linksGroup = g.select<SVGGElement>('.links-group');
     const link = linksGroup
       .selectAll<SVGLineElement, LinkDatum>('line')
       .data(newLinks, (d) => d.id);
 
     link.exit().remove();
-
     const linkEnter = link.enter()
       .append('line')
       .attr('stroke', '#30363d')
       .attr('stroke-width', 1)
       .attr('stroke-opacity', 0.4);
-
     const linkMerged = linkEnter.merge(link);
 
-    // -- Data join: nodes --
     const nodesGroup = g.select<SVGGElement>('.nodes-group');
     const node = nodesGroup
       .selectAll<SVGGElement, NodeDatum>('g.node')
@@ -267,12 +392,10 @@ export function AgentTopology({ maximized, onToggleMaximize }: Props) {
       .attr('class', 'node')
       .attr('cursor', 'grab');
 
-    // Circle for entering nodes
     nodeEnter.append('circle')
       .attr('class', 'main-circle')
       .attr('r', 18);
 
-    // Status ring
     nodeEnter.append('circle')
       .attr('class', 'status-ring')
       .attr('r', 22)
@@ -280,7 +403,6 @@ export function AgentTopology({ maximized, onToggleMaximize }: Props) {
       .attr('stroke-width', 1)
       .attr('opacity', 0.3);
 
-    // Label
     nodeEnter.append('text')
       .attr('class', 'node-label')
       .attr('text-anchor', 'middle')
@@ -290,7 +412,6 @@ export function AgentTopology({ maximized, onToggleMaximize }: Props) {
       .attr('font-weight', '600')
       .attr('pointer-events', 'none');
 
-    // ID label below nodes
     nodeEnter.append('text')
       .attr('class', 'node-id')
       .attr('text-anchor', 'middle')
@@ -299,10 +420,8 @@ export function AgentTopology({ maximized, onToggleMaximize }: Props) {
       .attr('font-size', '8px')
       .attr('pointer-events', 'none');
 
-    // Merge enter + update
     const nodeMerged = nodeEnter.merge(node);
 
-    // Update dynamic attributes on ALL nodes (enter + existing)
     nodeMerged.select('.main-circle')
       .attr('fill', (d) => AGENT_COLORS[d.type] || AGENT_COLORS.unknown)
       .attr('stroke', (d) => {
@@ -334,7 +453,6 @@ export function AgentTopology({ maximized, onToggleMaximize }: Props) {
         return parts[parts.length - 1];
       });
 
-    // Drag behavior
     const drag = d3.drag<SVGGElement, NodeDatum>()
       .on('start', (event, d) => {
         if (!event.active) simulation.alphaTarget(0.3).restart();
@@ -353,7 +471,6 @@ export function AgentTopology({ maximized, onToggleMaximize }: Props) {
 
     nodeMerged.call(drag);
 
-    // Tooltip handlers
     nodeMerged
       .on('mouseover', (_event, d) => {
         if (!d.status) return;
@@ -365,7 +482,7 @@ export function AgentTopology({ maximized, onToggleMaximize }: Props) {
             `<div class="value">Type: ${s.agent_type}</div>` +
             `<div class="value">Status: ${s.status}</div>` +
             (s.tags?.length ? `<div class="value">Capabilities: ${s.tags.join(', ')}</div>` : '') +
-            `<div class="value">Uptime: ${Math.floor(s.uptime_seconds)}s</div>`
+            `<div class="value">Uptime: ${formatUptime(s.uptime_seconds)}</div>`
           );
       })
       .on('mousemove', (event) => {
@@ -377,7 +494,6 @@ export function AgentTopology({ maximized, onToggleMaximize }: Props) {
         tooltip.style('display', 'none');
       });
 
-    // Tick
     simulation.on('tick', () => {
       linkMerged
         .attr('x1', (d) => ((d.source as NodeDatum).x ?? 0))
@@ -388,11 +504,9 @@ export function AgentTopology({ maximized, onToggleMaximize }: Props) {
       nodeMerged.attr('transform', (d) => `translate(${d.x ?? 0},${d.y ?? 0})`);
     });
 
-    // Gently reheat — don't reset positions
     simulation.alpha(0.3).restart();
   }, [agents, dimensions]);
 
-  // Update SVG size when dimensions change (without full rebuild)
   useEffect(() => {
     if (!svgRef.current || dimensions.width === 0) return;
     const svg = d3.select(svgRef.current);
@@ -414,9 +528,11 @@ export function AgentTopology({ maximized, onToggleMaximize }: Props) {
           )}
         </div>
       </div>
-      <div ref={containerRef} className="panel-body" style={{ padding: 0, position: 'relative' }}>
-        <svg ref={svgRef} style={{ display: 'block', position: 'absolute', inset: 0 }} />
-        <Legend />
+      <div style={{ display: 'flex', flex: 1, minHeight: 0, overflow: 'hidden' }}>
+        <div ref={containerRef} className="panel-body" style={{ padding: 0, position: 'relative', flex: 1 }}>
+          <svg ref={svgRef} style={{ display: 'block', position: 'absolute', inset: 0 }} />
+        </div>
+        <NodeStatusSidebar agents={agents} stats={stats} />
       </div>
     </div>
   );

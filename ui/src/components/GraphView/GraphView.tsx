@@ -7,12 +7,14 @@ const NODE_COLORS: Record<string, string> = {
   Entity: '#58a6ff',
   Observation: '#8b949e',
   Claim: '#3fb950',
+  ExtractedTriple: '#d29922',
 };
 
 const NODE_RADIUS: Record<string, number> = {
   Entity: 12,
   Observation: 8,
   Claim: 10,
+  ExtractedTriple: 8,
 };
 
 interface Props {
@@ -403,25 +405,31 @@ export function GraphView({ maximized, onToggleMaximize }: Props) {
         </div>
       </div>
       <div ref={containerRef} className="panel-body" style={{ padding: 0, position: 'relative' }}>
-        {loading && nodes.length === 0 ? (
+        <svg ref={svgRef} style={{ display: 'block', position: 'absolute', inset: 0 }} />
+        {nodes.length > 0 && <Legend />}
+        {loading && nodes.length === 0 && (
           <div
             style={{
+              position: 'absolute',
+              inset: 0,
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
-              height: '100%',
               color: 'var(--text-muted)',
+              pointerEvents: 'none',
             }}
           >
             Loading graph...
           </div>
-        ) : fetchError && nodes.length === 0 ? (
+        )}
+        {fetchError && nodes.length === 0 && (
           <div
             style={{
+              position: 'absolute',
+              inset: 0,
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
-              height: '100%',
               color: 'var(--text-muted)',
               fontSize: '13px',
               flexDirection: 'column',
@@ -433,24 +441,22 @@ export function GraphView({ maximized, onToggleMaximize }: Props) {
               Retry
             </button>
           </div>
-        ) : nodes.length === 0 ? (
+        )}
+        {!loading && !fetchError && nodes.length === 0 && (
           <div
             style={{
+              position: 'absolute',
+              inset: 0,
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
-              height: '100%',
               color: 'var(--text-muted)',
               fontSize: '13px',
+              pointerEvents: 'none',
             }}
           >
             No graph data yet &mdash; make an observation to get started
           </div>
-        ) : (
-          <>
-            <svg ref={svgRef} style={{ display: 'block', position: 'absolute', inset: 0 }} />
-            <Legend />
-          </>
         )}
       </div>
     </div>

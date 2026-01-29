@@ -200,7 +200,34 @@ def create_ui_bridge(node: PeerNode, store: TripleStore) -> APIRouter:
 
     @router.get("/stats")
     async def stats() -> dict[str, Any]:
-        """Return system statistics."""
+        """Return system statistics with per-node-type breakdown."""
+        from src.p2p.types import PeerState
+
+        # Build node-type breakdown from routing table
+        own_state = PeerState(
+            info=node.info,
+            status="alive",
+            last_seen=time.time(),
+            heartbeat_seq=node._heartbeat_seq,
+        )
+        all_peers = [own_state] + node.routing.get_all_peers()
+        nodes_by_type: dict[str, list[dict[str, Any]]] = {}
+        for ps in all_peers:
+            agent = _peer_to_agent(ps)
+            atype = agent["agent_type"]
+            if atype not in nodes_by_type:
+                nodes_by_type[atype] = []
+            nodes_by_type[atype].append({
+                "agent_id": agent["agent_id"],
+                "status": agent["status"],
+                "uptime_seconds": agent["uptime_seconds"],
+                "capabilities": agent["tags"],
+            })
+
+        alive_count = sum(
+            1 for ps in all_peers if ps.status == "alive"
+        )
+
         try:
             obs_count = await store.raw_query(
                 "MATCH (n:Node {type: 'Observation'}) RETURN count(n) AS c"
@@ -211,10 +238,33 @@ def create_ui_bridge(node: PeerNode, store: TripleStore) -> APIRouter:
             entity_count = await store.raw_query(
                 "MATCH (n:Node {type: 'Entity'}) RETURN count(n) AS c"
             )
+            triple_count = await store.raw_query(
+                "MATCH (n:Node {type: 'ExtractedTriple'}) RETURN count(n) AS c"
+            )
+            rel_count = await store.raw_query(
+                "MATCH ()-[r]->() RETURN count(r) AS c"
+            )
 
             return {
-                "total_agents": node.routing.peer_count + 1,  # +1 for self
-                "active_agents": len(node.routing.get_alive_peers()) + 1,
+                "network": {
+                    "total_nodes": len(all_peers),
+                    "active_nodes": alive_count,
+                    "websocket_clients": len(ui_clients),
+                    "nodes_by_type": {
+                        t: len(ns) for t, ns in nodes_by_type.items()
+                    },
+                },
+                "knowledge": {
+                    "observations": obs_count[0]["c"] if obs_count else 0,
+                    "claims": claim_count[0]["c"] if claim_count else 0,
+                    "entities": entity_count[0]["c"] if entity_count else 0,
+                    "triples": triple_count[0]["c"] if triple_count else 0,
+                    "relationships": rel_count[0]["c"] if rel_count else 0,
+                },
+                "nodes": nodes_by_type,
+                # Keep legacy fields for backward compat
+                "total_agents": len(all_peers),
+                "active_agents": alive_count,
                 "total_observations": obs_count[0]["c"] if obs_count else 0,
                 "total_claims": claim_count[0]["c"] if claim_count else 0,
                 "total_entities": entity_count[0]["c"] if entity_count else 0,
@@ -223,8 +273,24 @@ def create_ui_bridge(node: PeerNode, store: TripleStore) -> APIRouter:
         except Exception:
             logger.debug("Error fetching stats", exc_info=True)
             return {
-                "total_agents": node.routing.peer_count + 1,
-                "active_agents": len(node.routing.get_alive_peers()) + 1,
+                "network": {
+                    "total_nodes": len(all_peers),
+                    "active_nodes": alive_count,
+                    "websocket_clients": len(ui_clients),
+                    "nodes_by_type": {
+                        t: len(ns) for t, ns in nodes_by_type.items()
+                    },
+                },
+                "knowledge": {
+                    "observations": 0,
+                    "claims": 0,
+                    "entities": 0,
+                    "triples": 0,
+                    "relationships": 0,
+                },
+                "nodes": nodes_by_type,
+                "total_agents": len(all_peers),
+                "active_agents": alive_count,
                 "total_observations": 0,
                 "total_claims": 0,
                 "total_entities": 0,

@@ -701,9 +701,9 @@ memory-system/
 
 ---
 
-*Document version: 0.4*
-*Last updated: 2026-01-27*
-*Status: v0.2 distributed architecture implemented*
+*Document version: 0.5*
+*Last updated: 2026-01-29*
+*Status: v0.3 P2P architecture with UI bridge implemented*
 
 ---
 
@@ -1315,7 +1315,7 @@ Nodes discover each other via bootstrap seed URLs, maintain WebSocket neighbor c
 
 ```
 agentic-memory/
-├── docker-compose.yml              # Full stack: neo4j + P2P nodes
+├── docker-compose.yml              # Full stack: neo4j + P2P nodes + UI
 ├── docker-compose.test.yml         # E2E test overlay
 ├── Dockerfile
 ├── Makefile                        # Deployment targets
@@ -1329,7 +1329,8 @@ agentic-memory/
 │   │   ├── gossip.py
 │   │   ├── node.py
 │   │   ├── memory_client.py
-│   │   └── local_state.py
+│   │   ├── local_state.py
+│   │   └── ui_bridge.py            # UI bridge (/v1/ endpoints for React)
 │   ├── store.py                    # Neo4j (unchanged)
 │   ├── llm.py                      # Claude API (unchanged)
 │   ├── interfaces.py               # MemoryService (unchanged)
@@ -1343,7 +1344,7 @@ agentic-memory/
 ├── run_node.py                     # Unified P2P node entry point
 ├── main.py                         # Dev mode (in-process P2P nodes)
 └── tests/
-    ├── test_p2p.py                 # P2P unit tests (54 tests)
+    ├── test_p2p.py                 # P2P unit tests (61 tests)
     ├── test_prompts.py             # Prompt tests (13 tests)
     ├── test_store.py               # Store tests (10 tests)
     ├── test_llm.py                 # LLM tests (5 tests)
@@ -1422,10 +1423,38 @@ make docker-scale-inference N=3
 ### 14.9 Open Items
 
 - [ ] Multi-node integration test (start real nodes, verify full flow)
-- [ ] Reconnect UI dashboard to P2P topology
+- [x] ~~Reconnect UI dashboard to P2P topology~~ (done: UI bridge + nginx proxy)
 - [ ] NAT traversal for cross-internet deployment
 - [ ] TLS on all connections (HTTPS + WSS)
 - [ ] Node authentication and capability attestation
 - [ ] Persistent routing table (survive restarts)
 - [ ] Bandwidth-aware routing (prefer faster peers)
 - [ ] Consistent hashing for deterministic observation→agent routing
+
+### 14.10 UI Bridge (`src/p2p/ui_bridge.py`)
+
+The React UI expects `/v1/` REST/WebSocket endpoints. Rather than modifying the frontend, a bridge layer mounted on the store node translates P2P state into the format the UI expects.
+
+**Endpoints:**
+
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `/v1/ws` | WebSocket | Sends `snapshot` on connect, polls routing table for changes, forwards P2P memory events |
+| `/v1/graph/nodes` | GET | Queries Neo4j for knowledge graph nodes and edges |
+| `/v1/stats` | GET | Network stats, knowledge counts, per-node-type breakdown |
+
+**Translation:** `PeerState` → `AgentStatus` format. Primary capability chosen via priority list (`cli > inference > validation > store > llm`). Status mapped: `alive→running`, `suspect→stale`, `dead→dead`.
+
+**Event forwarding:** The bridge registers as an event listener on the local PeerNode. When `_broadcast_event()` fires (after observe/claim), local listeners are notified first, then the event is broadcast to network neighbors.
+
+### 14.11 Cross-Network URL Remapping
+
+When a CLI on the host connects to Docker containers, the container's advertised URL (e.g. `http://store-node:9000`) is unreachable from the host. The bootstrap URL remapping system handles this:
+
+1. During `_join_peer()`, if the bootstrap peer's advertised URL differs from the actual bootstrap URL, the override is saved in `_url_overrides`
+2. `apply_url_overrides()` uses `dataclasses.replace()` to create new `PeerInfo` instances (since `PeerInfo` is frozen)
+3. Gossip handler re-applies overrides after merging peer state, ensuring they persist
+
+### 14.12 Auto-Reconnect
+
+When all peers die (e.g. Docker containers restart), the health check loop detects an empty routing table and re-bootstraps from the original seed URLs. This prevents permanent disconnection after transient failures.

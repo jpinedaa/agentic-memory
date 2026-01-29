@@ -2,7 +2,7 @@
 
 This document defines the design for the real-time visual dashboard for the Agentic Memory System.
 
-> **v0.3 note:** The UI was originally built against the centralized FastAPI + Redis backend (v0.2). It needs to be reconnected to the P2P architecture — connecting to any node's transport server instead of a central API. This is tracked as an open item.
+> **v0.3 update:** The UI is now connected to the P2P architecture via a bridge layer (`src/p2p/ui_bridge.py`) mounted on the store node. The bridge translates P2P state into `/v1/` endpoints the React frontend expects. Nginx proxies `/v1/` routes to the store node.
 
 ---
 
@@ -17,42 +17,45 @@ The UI runs as a separate container, connecting to any P2P node via WebSocket.
 
 ---
 
-## Architecture (v0.3 target)
+## Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
 │                         Visual UI (React)                           │
 │  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐     │
 │  │ Agent Topology  │  │  Event Stream   │  │   Graph View    │     │
-│  │     (D3.js)     │  │    (D3.js)      │  │    (D3.js)      │     │
+│  │  (D3 + Sidebar) │  │    (Live feed)  │  │    (D3.js)      │     │
 │  └────────┬────────┘  └────────┬────────┘  └────────┬────────┘     │
 │           │                    │                    │               │
 │           └────────────────────┼────────────────────┘               │
 │                                │                                    │
 │                    ┌───────────┴───────────┐                        │
-│                    │   WebSocket Client    │                        │
-│                    │  (connect to any node)│                        │
+│                    │   WebSocket + REST    │                        │
+│                    │  WS /v1/ws            │                        │
+│                    │  GET /v1/graph/nodes  │                        │
+│                    │  GET /v1/stats        │                        │
 │                    └───────────┬───────────┘                        │
 └────────────────────────────────┼────────────────────────────────────┘
-                                 │
-                    WebSocket ws://node:9000/p2p/ws
-                                 │
-┌────────────────────────────────┼────────────────────────────────────┐
-│                      Any PeerNode                                   │
-│                    ┌───────────┴───────────┐                        │
-│                    │  TransportServer      │                        │
-│                    │  (FastAPI + WS)       │                        │
-│                    └───────────┬───────────┘                        │
-│                                │                                    │
-│    ┌───────────┬───────────────┼───────────────┐                    │
-│    │           │               │               │                    │
-│    ▼           ▼               ▼               ▼                    │
-│ Routing    Gossip          Events          Health                   │
-│ Table      Protocol        (P2P flood)     Checks                  │
+                                 │ nginx proxy
+                                 ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│                    Store Node (port 9000)                            │
+│                                                                     │
+│  ┌──────────────────────────────────────────────┐                   │
+│  │  UI Bridge (src/p2p/ui_bridge.py)            │                   │
+│  │  - WS /v1/ws: snapshot + topology polling    │                   │
+│  │  - GET /v1/graph/nodes: Neo4j query          │                   │
+│  │  - GET /v1/stats: network + knowledge counts │                   │
+│  └──────────────────────────────────────────────┘                   │
+│                       │                                             │
+│       ┌───────────────┼───────────────┐                             │
+│       ▼               ▼               ▼                             │
+│    Routing         P2P Events      Neo4j                            │
+│    Table           (local listener) (TripleStore)                   │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
-Key change from v0.2: The UI no longer depends on a central API. It connects to any node's WebSocket endpoint and receives the same gossip/event data that nodes exchange with each other.
+The UI bridge sits on the store node (which has Neo4j access). It translates P2P `PeerState` into the `AgentStatus` format the React frontend expects and forwards memory events via WebSocket.
 
 ---
 
@@ -116,39 +119,59 @@ Memory events are broadcast via P2P event flooding:
 
 ### 1. Agent Topology Panel
 
-A force-directed graph showing P2P nodes and their WebSocket connections.
+Two-column layout: D3 force-directed mesh graph on the left, status sidebar on the right.
 
 ```
-     ┌──────────┐
-     │ STORE+LLM│
-     └────┬─────┘
-          │ ws
-    ┌─────┼─────────┐
-    │     │         │
-    ▼     ▼         ▼
-┌──────┐ ┌──────┐ ┌──────┐
-│ INF  │ │ VAL  │ │ CLI  │
-└──────┘ └──────┘ └──────┘
+┌──────────────────────────────┬────────────────────┐
+│                              │  Network           │
+│    STORE ◄──── INF           │  Total: 4          │
+│      ▲          ▲            │  Active: 4         │
+│      │          │            │  WS Clients: 1     │
+│      ▼          ▼            │                    │
+│    CLI ◄────► VAL            │  Knowledge         │
+│                              │  Obs: 12           │
+│  (D3 mesh, all nodes equal)  │  Claims: 8         │
+│                              │  Entities: 5       │
+│                              │                    │
+│                              │  Store (1)         │
+│                              │  ● node-a3f8 running│
+│                              │                    │
+│                              │  Inference (1)     │
+│                              │  ● node-7d2e running│
+└──────────────────────────────┴────────────────────┘
 ```
 
-**Visual Elements:**
-- **Nodes**: Color-coded by capability set (not centralized hub — all peers are equal)
-  - Store+LLM: Purple
-  - Inference: Blue
-  - Validator: Green
-  - CLI: Orange
-- **Connection lines**: WebSocket connections between neighbors
-- **Status glow**: Green = alive, Yellow = suspect, Gray = dead
-- **Capability badges**: Small icons showing what each node can do
-- **Metrics tooltip**: Hover to see heartbeat_seq, uptime, capabilities
+**D3 Graph (left):**
+- **Nodes**: Color-coded by primary capability (all peers equal, P2P mesh)
+  - Store: Purple (`#a371f7`)
+  - Inference: Blue (`#58a6ff`)
+  - Validation: Green (`#3fb950`)
+  - CLI: Orange (`#d29922`)
+- **Edges**: Gossip connections between all peers
+- **Status glow**: Green = running, Yellow = suspect, Gray = dead
+- **Drag/zoom/pan**: Interactive, state preserved across data updates
+
+**Status Sidebar (right, 210px):**
+- **Network section**: Total/active nodes, WebSocket clients
+- **Knowledge section**: Observations, claims, entities, triples, relationships
+- **Per-type sections**: Each node type (Store, Inference, Validator, CLI) shows cards with status dot, short ID, uptime, capabilities
+- Data fetched from `/v1/stats` every 10 seconds
 
 ### 2. Event Stream Panel
 
-Unchanged from v0.2 — still a flowing list of memory events.
+Live feed of memory events (observations, claims, inferences, contradictions). Events forwarded from P2P network via the UI bridge's event listener.
 
 ### 3. Graph View Panel
 
-Unchanged from v0.2 — still a D3 force-directed knowledge graph. Data source changes from REST API to P2P request to a store-capable node.
+D3 force-directed knowledge graph visualization. Always renders the SVG element (no conditional mounting). Fetches data from `/v1/graph/nodes` and auto-refreshes on memory events.
+
+**Node types and colors:**
+- Entity: Blue (`#58a6ff`)
+- Observation: Gray (`#8b949e`)
+- Claim: Green (`#3fb950`)
+- ExtractedTriple: Yellow (`#d29922`)
+
+Edges show relationship types as labels. Interactive legend toggles node type visibility.
 
 ---
 
@@ -188,6 +211,7 @@ Unchanged from v0.2 — still a D3 force-directed knowledge graph. Data source c
 ```
 ui/
 ├── Dockerfile
+├── nginx.conf                    # Proxies /v1/ to store-node:9000
 ├── package.json
 ├── vite.config.ts
 ├── index.html
@@ -195,21 +219,18 @@ ui/
 │   ├── main.tsx
 │   ├── App.tsx
 │   ├── components/
-│   │   ├── AgentTopology/
-│   │   ├── EventStream/
-│   │   ├── GraphView/
-│   │   ├── StatusBar/
-│   │   └── common/
+│   │   ├── AgentTopology/        # D3 mesh graph + NodeStatusSidebar
+│   │   ├── EventStream/          # Live memory event feed
+│   │   ├── GraphView/            # D3 knowledge graph (always-rendered SVG)
+│   │   └── StatusBar/            # Footer: connection, counts, version
 │   ├── hooks/
-│   │   ├── useP2PSocket.ts      # Connect to any node's WS
-│   │   ├── useTopology.ts       # Build topology from gossip
-│   │   └── useGraphData.ts
+│   │   └── useWebSocket.ts       # Connect to /v1/ws via nginx proxy
 │   ├── stores/
-│   │   ├── topologyStore.ts     # Zustand store for peer state
-│   │   ├── eventStore.ts
-│   │   └── graphStore.ts
+│   │   ├── agentStore.ts         # Zustand store for agent/peer state
+│   │   ├── eventStore.ts         # Memory events
+│   │   └── graphStore.ts         # Knowledge graph nodes/edges
 │   ├── types/
-│   │   └── index.ts
+│   │   └── index.ts              # AgentStatus, MemoryEvent, GraphNode, SystemStats
 │   └── styles/
 │       └── globals.css
 └── tsconfig.json
@@ -217,15 +238,28 @@ ui/
 
 ---
 
-## Migration TODO
+## Implementation Notes
 
-The UI currently works against the v0.2 centralized API. To reconnect it to v0.3 P2P:
+### UI Bridge Approach
 
-1. Replace `useWebSocket` hook — connect to any node's `/p2p/ws` endpoint
-2. Replace `useAgentStatus` — derive from gossip topology instead of agent registry
-3. Update `AgentTopology` — render P2P mesh instead of hub-and-spoke
-4. Update `GraphView` data fetching — route queries via P2P to store-capable nodes
-5. Update Docker config — `VITE_WS_URL` points to any node, not central API
+Rather than modifying the React frontend to speak the P2P protocol directly, a bridge layer (`src/p2p/ui_bridge.py`) was added to the store node's FastAPI app. This provides the same `/v1/` endpoints the UI was built for:
+
+- **WS `/v1/ws`**: Sends `snapshot` on connect with all peers as agents. Polls routing table every 2s for changes, forwards P2P memory events.
+- **GET `/v1/graph/nodes`**: Queries Neo4j for all `Node` entities and relationships.
+- **GET `/v1/stats`**: Returns structured stats with `network`, `knowledge`, and per-node-type `nodes` sections.
+
+### PeerState → AgentStatus Translation
+
+```python
+CAPABILITY_PRIORITY = ["cli", "inference", "validation", "store", "llm"]
+STATUS_MAP = {"alive": "running", "suspect": "stale", "dead": "dead"}
+```
+
+Primary capability is chosen by priority order (first match). A node with `{store, llm}` capabilities shows as type `store` in the UI.
+
+### D3 Rendering Fix
+
+The knowledge graph SVG is always rendered (not conditionally gated on `nodes.length > 0`). Status messages overlay the SVG. This prevents D3 initialization from running before the SVG element is mounted.
 
 ---
 

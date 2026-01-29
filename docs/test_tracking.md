@@ -50,8 +50,9 @@ pytest tests/test_p2p.py::TestRoutingTable::test_route_method_observe
 | `TestNodeDispatch` | 8 | Ping/pong, join/welcome, leave, gossip, dedup, request handling, events |
 | `TestP2PMemoryClient` | 8 | Local execution, remote failure, all MemoryAPI methods |
 | `TestWorkerAgent` | 1 | Event-driven wakeup |
+| `TestUrlOverrides` | 3 | Bootstrap URL remapping, no-op when not needed, gossip preserves overrides |
 
-**Status:** ✅ Passing (58 tests)
+**Status:** ✅ Passing (61 tests)
 
 ---
 
@@ -154,6 +155,7 @@ pytest tests/test_p2p.py::TestRoutingTable::test_route_method_observe
 
 | Component | File | Priority | Notes |
 |-----------|------|----------|-------|
+| **UI Bridge** | `src/p2p/ui_bridge.py` | MEDIUM | WebSocket snapshot, stats endpoint, event forwarding |
 | **Transport layer** | `src/p2p/transport.py` | MEDIUM | Server start/stop, WebSocket connections (needs real network) |
 | **Gossip convergence** | `src/p2p/gossip.py` | MEDIUM | Multi-node gossip propagation (integration test) |
 | **Multi-node e2e** | `run_node.py` | HIGH | Full P2P network with real nodes |
@@ -196,5 +198,5 @@ pytest tests/test_p2p.py::TestRoutingTable::test_route_method_observe
 
 ---
 
-*Document version: 0.2*
-*Last updated: 2026-01-28*
+*Document version: 0.3*
+*Last updated: 2026-01-29*
