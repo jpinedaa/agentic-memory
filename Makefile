@@ -11,6 +11,11 @@ install: ## Install dependencies in venv
 
 dev: ## Run dev mode (all nodes in-process, needs Neo4j)
 	docker compose up neo4j -d
+	@echo "Waiting for Neo4j Bolt to be ready..."
+	@for i in $$(seq 1 30); do \
+		docker compose exec neo4j cypher-shell -u neo4j -p memory-system "RETURN 1" >/dev/null 2>&1 && break; \
+		sleep 2; \
+	done
 	.venv/bin/python main.py
 
 dev-store: ## Run just the store+llm node locally
@@ -29,6 +34,11 @@ dev-cli: ## Run a CLI node locally (bootstrap to localhost:9000)
 
 debug-agents: ## Run dev mode with DEBUG logging for agents, LLM, and prompts
 	docker compose up neo4j -d
+	@echo "Waiting for Neo4j Bolt to be ready..."
+	@for i in $$(seq 1 30); do \
+		docker compose exec neo4j cypher-shell -u neo4j -p memory-system "RETURN 1" >/dev/null 2>&1 && break; \
+		sleep 2; \
+	done
 	LOG_CONFIG=logging.debug-agents.json .venv/bin/python main.py
 
 # ── Testing ─────────────────────────────────────────────────────────

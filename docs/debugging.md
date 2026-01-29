@@ -55,7 +55,7 @@ Sets DEBUG on these modules while keeping everything else at INFO:
 | `src.agents.base` | Event vs poll wakeup, tick timing, claim counts |
 | `src.agents.inference` | Skip reasons (stale, already processed, empty, lock), observation text preview |
 | `src.agents.validator` | Claim count, subject grouping, pair skip reasons |
-| `src.llm` | API call params (model, text length), response stats (stop_reason, token usage), tool extraction |
+| `src.llm` | Full system/user prompts sent, raw response content, API stats (stop_reason, token usage), tool extraction |
 | `src.prompts` | Template loading (cache hit/miss, file path), inheritance chain, render output sizes |
 
 **Example output:**
@@ -127,7 +127,7 @@ All modules use `logging.getLogger(__name__)`, so logger names match Python impo
 | `src.agents.base` | `src/agents/base.py` | Agent start/stop, event-driven wakeup, tick timing, errors |
 | `src.agents.inference` | `src/agents/inference.py` | Observation filtering, skip reasons, inference results |
 | `src.agents.validator` | `src/agents/validator.py` | Claim grouping, pair checks, contradiction detection |
-| `src.llm` | `src/llm.py` | Claude API calls (params, response stats, tool extraction) |
+| `src.llm` | `src/llm.py` | All Claude API calls: extract_observation, parse_claim, infer, generate_query, synthesize_response |
 | `src.prompts` | `src/prompts.py` | Template loading, cache, inheritance, render stats |
 | `src.interfaces` | `src/interfaces.py` | MemoryService operations |
 | `src.store` | `src/store.py` | Neo4j query execution |
@@ -173,12 +173,20 @@ Run `make debug-agents` and look for:
 
 ### "What prompt is being sent to Claude?"
 
-With `debug-agents`, the `src.prompts` logger shows template loading and render sizes. The `src.llm` logger shows the API call parameters. For the full rendered prompt text, temporarily add a log line in `src/llm.py` before the API call:
+With `debug-agents`, the `src.llm` logger prints the full prompt and response for every API call:
 
-```python
-logger.debug("system prompt: %s", rendered["system"])
-logger.debug("user prompt: %s", rendered["user"])
 ```
+[src.llm] DEBUG: extract_observation SYSTEM:
+You are a knowledge extraction system...
+[src.llm] DEBUG: extract_observation USER:
+Extract structured data from this observation:
+
+The user prefers dark mode...
+[src.llm] DEBUG: extract_observation RESPONSE:
+[ToolUseBlock(id='toolu_...', name='record_observation', input={...})]
+```
+
+The `src.prompts` logger additionally shows template loading, cache hits, inheritance chain, and rendered sizes.
 
 ### "Why is the validator not finding contradictions?"
 

@@ -16,6 +16,7 @@ from src.prompts import (
     PromptLoader,
     ObservationVars,
     ClaimVars,
+    InferenceVars,
     QueryGenerationVars,
     SynthesisVars,
 )
@@ -138,14 +139,15 @@ class LLMTranslator:
         tpl_vars = ObservationVars(observation_text=text)
         rendered = prompt.render(tpl_vars)
 
+        user_content = f"Extract structured data from this observation:\n\n{text}"
         logger.debug("extract_observation: model=%s, text=%d chars", self._model, len(text))
+        logger.debug("extract_observation SYSTEM:\n%s", rendered["system"] or "")
+        logger.debug("extract_observation USER:\n%s", user_content)
         response = await self._client.messages.create(
             model=self._model,
             max_tokens=1024,
             system=rendered["system"] or "",
-            messages=[
-                {"role": "user", "content": f"Extract structured data from this observation:\n\n{text}"}
-            ],
+            messages=[{"role": "user", "content": user_content}],
             tools=[OBSERVATION_TOOL],
             tool_choice={"type": "tool", "name": "record_observation"},
         )
@@ -153,6 +155,7 @@ class LLMTranslator:
             "extract_observation: stop_reason=%s, usage=%s",
             response.stop_reason, response.usage,
         )
+        logger.debug("extract_observation RESPONSE:\n%s", response.content)
         data = self._extract_tool_input(response)
         return ObservationData(
             entities=data.get("entities", []),
@@ -168,17 +171,15 @@ class LLMTranslator:
         tpl_vars = ClaimVars(claim_text=text, context=context or [])
         rendered = prompt.render(tpl_vars)
 
+        user_content = rendered["user"] or f"Parse this claim:\n{text}"
         logger.debug("parse_claim: model=%s, text=%d chars", self._model, len(text))
+        logger.debug("parse_claim SYSTEM:\n%s", rendered["system"] or "")
+        logger.debug("parse_claim USER:\n%s", user_content)
         response = await self._client.messages.create(
             model=self._model,
             max_tokens=1024,
             system=rendered["system"] or "",
-            messages=[
-                {
-                    "role": "user",
-                    "content": rendered["user"] or f"Parse this claim:\n{text}",
-                }
-            ],
+            messages=[{"role": "user", "content": user_content}],
             tools=[CLAIM_TOOL],
             tool_choice={"type": "tool", "name": "record_claim"},
         )
@@ -186,6 +187,7 @@ class LLMTranslator:
             "parse_claim: stop_reason=%s, usage=%s",
             response.stop_reason, response.usage,
         )
+        logger.debug("parse_claim RESPONSE:\n%s", response.content)
         data = self._extract_tool_input(response)
         return ClaimData(
             subject=data["subject"],
@@ -203,17 +205,21 @@ class LLMTranslator:
         tpl_vars = QueryGenerationVars(query=text)
         rendered = prompt.render(tpl_vars)
 
+        user_content = rendered["user"] or ""
         logger.debug("generate_query: model=%s, query=%s", self._model, text)
+        logger.debug("generate_query SYSTEM:\n%s", rendered["system"] or "")
+        logger.debug("generate_query USER:\n%s", user_content)
         response = await self._client.messages.create(
             model=self._model,
             max_tokens=512,
             system=rendered["system"] or "",
-            messages=[{"role": "user", "content": rendered["user"] or ""}],
+            messages=[{"role": "user", "content": user_content}],
         )
         logger.debug(
             "generate_query: stop_reason=%s, usage=%s",
             response.stop_reason, response.usage,
         )
+        logger.debug("generate_query RESPONSE:\n%s", response.content)
         cypher = self._extract_text(response).strip()
         # Strip any markdown fencing the model might add
         if cypher.startswith("```"):
@@ -230,18 +236,49 @@ class LLMTranslator:
         tpl_vars = SynthesisVars(query=query, results=results)
         rendered = prompt.render(tpl_vars)
 
+        user_content = rendered["user"] or ""
         logger.debug("synthesize_response: model=%s, results=%d rows", self._model, len(results))
+        logger.debug("synthesize_response SYSTEM:\n%s", rendered["system"] or "")
+        logger.debug("synthesize_response USER:\n%s", user_content)
         response = await self._client.messages.create(
             model=self._model,
             max_tokens=1024,
             system=rendered["system"] or "",
-            messages=[{"role": "user", "content": rendered["user"] or ""}],
+            messages=[{"role": "user", "content": user_content}],
         )
         logger.debug(
             "synthesize_response: stop_reason=%s, usage=%s",
             response.stop_reason, response.usage,
         )
+        logger.debug("synthesize_response RESPONSE:\n%s", response.content)
         return self._extract_text(response)
+
+    async def infer(self, observation_text: str) -> str | None:
+        """Generate an inference claim from an observation, or None if not meaningful."""
+        prompt = self._prompt_loader.load("inference_agent/infer")
+        tpl_vars = InferenceVars(observation_text=observation_text)
+        rendered = prompt.render(tpl_vars)
+
+        system_content = rendered["system"] or ""
+        user_content = rendered["user"] or ""
+        logger.debug("infer: model=%s, observation=%d chars", self._model, len(observation_text))
+        logger.debug("infer SYSTEM:\n%s", system_content)
+        logger.debug("infer USER:\n%s", user_content)
+
+        response = await self._client.messages.create(
+            model=self._model,
+            max_tokens=256,
+            system=system_content,
+            messages=[{"role": "user", "content": user_content}],
+        )
+        logger.debug("infer: stop_reason=%s, usage=%s", response.stop_reason, response.usage)
+        logger.debug("infer RESPONSE:\n%s", response.content)
+
+        text = self._extract_text(response).strip()
+        if not text or text.upper().startswith("SKIP"):
+            logger.debug("infer: skipped (text=%r)", text[:100] if text else "")
+            return None
+        return text
 
     def _extract_text(self, response: anthropic.types.Message) -> str:
         """Extract text content from a Claude response."""

@@ -99,7 +99,7 @@ src/p2p/local_state.py   → LocalAgentState (replaces Redis AgentState)
 src/p2p/ui_bridge.py     → UI bridge (translates P2P state to /v1/ endpoints for React UI)
 src/memory_protocol.py   → MemoryAPI protocol (shared contract)
 src/interfaces.py        → MemoryService (in-process implementation)
-src/llm.py               → Claude API translation layer (tool_use)
+src/llm.py               → Claude API translation layer (extract, parse, infer, query, synthesize)
 src/prompts.py           → Prompt template loader (YAML + Jinja2 + Pydantic)
 src/store.py             → Neo4j async wrapper
 prompts/                 → YAML prompt templates (organized by agent)

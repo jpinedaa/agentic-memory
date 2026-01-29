@@ -808,10 +808,10 @@ InferenceAgent.process() (src/agents/inference.py)
     │ 2. Filter out already-processed observation IDs
     │ 3. For each new observation:
     ▼
-InferenceAgent._infer(raw_content)
-    │ Claude API call with INFERENCE_PROMPT
+MemoryService.infer(raw_content) → LLMTranslator.infer() (src/llm.py)
+    │ Claude API call with inference_agent/infer prompt
     │ Input:  "I prefer morning meetings"
-    │ Output: "User prefers morning meetings" (or "SKIP" if too vague)
+    │ Output: "User prefers morning meetings" (or None if SKIP/empty)
     │
     ▼ (back in WorkerAgent.run)
     │ memory.claim("User prefers morning meetings", source="inference_agent")

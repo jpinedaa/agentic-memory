@@ -12,7 +12,6 @@ from datetime import datetime, timezone
 from typing import Any
 
 from src.llm import LLMTranslator
-from src.prompts import PromptLoader, InferenceVars
 from src.store import TripleStore
 
 logger = logging.getLogger(__name__)
@@ -36,7 +35,6 @@ class MemoryService:
     def __init__(self, store: TripleStore, llm: LLMTranslator) -> None:
         self.store = store
         self.llm = llm
-        self._prompt_loader = PromptLoader()
 
     async def observe(self, text: str, source: str) -> str:
         """Record an observation from the external world.
@@ -251,25 +249,7 @@ class MemoryService:
 
     async def infer(self, observation_text: str) -> str | None:
         """Use the LLM to produce an inference claim from an observation."""
-        prompt = self._prompt_loader.load("inference_agent/infer")
-        tpl_vars = InferenceVars(observation_text=observation_text)
-        rendered = prompt.render(tpl_vars)
-
-        # pylint: disable-next=protected-access  # infer() needs raw Claude API not exposed publicly
-        response = await self.llm._client.messages.create(
-            model=self.llm._model,  # pylint: disable=protected-access
-            max_tokens=256,
-            system=rendered["system"] or "",
-            messages=[{"role": "user", "content": rendered["user"] or ""}],
-        )
-        text = ""
-        for block in response.content:
-            if block.type == "text":
-                text = block.text.strip()
-                break
-        if not text or text.upper().startswith("SKIP"):
-            return None
-        return text
+        return await self.llm.infer(observation_text)
 
     async def clear(self) -> None:
         """Clear all data from the graph."""
