@@ -61,26 +61,9 @@ class MemoryService:
             )
             await self.store.create_relationship(obs_id, "SUBJECT", entity_id)
 
-        # Create Claim nodes for each extracted triple and link entities
+        # Create entity-to-entity edges from extracted triples
         for ext in extraction.extractions:
-            claim_id = _new_id()
-            await self.store.create_node(claim_id, {
-                "type": "Claim",
-                "source": source,
-                "timestamp": _now(),
-                "subject_text": ext.subject,
-                "predicate_text": ext.predicate,
-                "object_text": ext.object,
-                "confidence": 1.0,
-            })
-            # Claim is based on the observation
-            await self.store.create_relationship(claim_id, "BASIS", obs_id)
-
-            # Link claim to subject entity
             subj_id = await self.store.get_or_create_entity(ext.subject, _new_id())
-            await self.store.create_relationship(claim_id, "SUBJECT", subj_id)
-
-            # Entity-to-entity edge (the actual triple as a graph relationship)
             obj_id = await self.store.get_or_create_entity(ext.object, _new_id())
             rel_type = _normalize_predicate(ext.predicate)
             await self.store.create_relationship(subj_id, rel_type, obj_id)

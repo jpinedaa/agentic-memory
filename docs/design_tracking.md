@@ -785,15 +785,13 @@ LLMTranslator.extract_observation() (src/llm.py)
     │ 2. store.create_node(obs_id, {type: "Observation", raw_content: ...})
     │ 3. store.get_or_create_entity("user") → entity node
     │ 4. store.create_relationship(obs_id, "SUBJECT", entity_id)
-    │ 5. For each extraction: store.create_node(claim_id, {type: "Claim", confidence: 1.0, ...})
-    │    store.create_relationship(claim_id, "BASIS", obs_id)
-    │    store.create_relationship(claim_id, "SUBJECT", subject_entity)
-    │    store.create_relationship(subject_entity, "PREFERS", object_entity)
+    │ 5. For each extraction: entity-to-entity edge only
+    │    store.get_or_create_entity(subject) → subj_entity
+    │    store.get_or_create_entity(object) → obj_entity
+    │    store.create_relationship(subj_entity, "PREFERS", obj_entity)
     ▼
 Neo4j Graph:
     (obs_abc) --SUBJECT--> (entity_user)
-    (claim_123) --BASIS--> (obs_abc)
-    (claim_123) --SUBJECT--> (entity_user)
     (entity_user) --PREFERS--> (entity_morning_meetings)
 ```
 
