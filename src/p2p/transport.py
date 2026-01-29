@@ -32,6 +32,7 @@ class TransportServer:
     def __init__(self, node: PeerNode) -> None:
         self.node = node
         self.app = FastAPI(title=f"P2P Node {node.node_id}")
+        self._server: uvicorn.Server | None = None
         self._server_task: asyncio.Task | None = None
         self._inbound_ws: dict[str, WebSocket] = {}  # peer_node_id -> ws
 
@@ -125,19 +126,23 @@ class TransportServer:
         config = uvicorn.Config(
             self.app, host=host, port=port, log_level="warning"
         )
-        server = uvicorn.Server(config)
-        self._server_task = asyncio.create_task(server.serve())
+        self._server = uvicorn.Server(config)
+        self._server_task = asyncio.create_task(self._server.serve())
         # Give the server a moment to bind
         await asyncio.sleep(0.3)
 
     async def stop(self) -> None:
         """Stop the server."""
         if self._server_task:
-            self._server_task.cancel()
+            self._server.should_exit = True
             try:
-                await self._server_task
-            except asyncio.CancelledError:
-                pass
+                await asyncio.wait_for(self._server_task, timeout=5.0)
+            except (asyncio.TimeoutError, asyncio.CancelledError):
+                self._server_task.cancel()
+                try:
+                    await self._server_task
+                except asyncio.CancelledError:
+                    pass
 
 
 class TransportClient:
