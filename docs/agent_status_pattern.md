@@ -1,294 +1,152 @@
 # Agent Status Pattern
 
-This document defines the pattern for agents reporting status to the memory system, with configurable push rates.
+This document defines how agents report presence and health in the P2P network.
+
+> **v0.3 update:** The centralized API + Redis heartbeat model (v0.2) has been replaced by gossip-based peer discovery. Agents are now P2P nodes that announce themselves via the gossip protocol.
 
 ---
 
 ## Overview
 
-Agents push status heartbeats to the API at configurable intervals. The API aggregates status in Redis and exposes it via WebSocket for real-time visualization.
+Every node in the network maintains a `PeerState` that is propagated to all other nodes via push-based gossip. There is no central registry — each node builds its own view of the network from gossip messages.
 
 ```
-┌─────────────┐     heartbeat      ┌─────────────┐      store       ┌─────────────┐
-│    Agent    │ ─────────────────► │   FastAPI   │ ───────────────► │    Redis    │
-│  (push)     │   POST /v1/status  │   (API)     │   agent:status:* │  (storage)  │
-└─────────────┘                    └─────────────┘                  └─────────────┘
-                                          │
-                                          │ broadcast
-                                          ▼
-                                   ┌─────────────┐
-                                   │  WebSocket  │
-                                   │   clients   │
-                                   └─────────────┘
+┌─────────────┐   gossip (WS)   ┌─────────────┐   gossip (WS)   ┌─────────────┐
+│  Store Node │ ◄─────────────► │  Inference  │ ◄─────────────► │  Validator  │
+│  (9000)     │                 │  Node (9001)│                 │  Node (9002)│
+└─────────────┘                 └─────────────┘                 └─────────────┘
+       ▲                                                               │
+       │                    gossip (WS)                                │
+       └───────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## Status Heartbeat
-
-### Data Model
+## PeerState Data Model
 
 ```python
 @dataclass
-class AgentStatus:
-    # Identity
-    agent_id: str           # Unique agent instance ID (UUID)
-    agent_type: str         # "inference", "validator", "cli"
-    tags: list[str]         # Custom tags for grouping
-
-    # Timing
-    timestamp: datetime     # When this heartbeat was sent
-    started_at: datetime    # When agent started
-    uptime_seconds: float   # Time since start
-
-    # Operational
-    status: str             # "running", "idle", "error", "stopping"
-    last_action: str        # Description of last action taken
-    last_action_at: datetime | None
-
-    # Metrics
-    items_processed: int    # Total items processed since start
-    queue_depth: int        # Items waiting to be processed
-    processing_time_avg_ms: float  # Average processing time
-    error_count: int        # Total errors since start
-
-    # Resources
-    memory_mb: float        # Current memory usage
-
-    # Push rate (echoed back from config)
-    push_interval_seconds: float
+class PeerState:
+    info: PeerInfo          # Identity (node_id, capabilities, URLs)
+    status: str = "alive"   # alive | suspect | dead
+    last_seen: float = 0.0  # timestamp of last gossip received
+    heartbeat_seq: int = 0  # monotonic counter, only owner increments
+    metadata: dict = {}     # extensible (metrics, tags, etc.)
 ```
 
-### API Endpoint
-
-```
-POST /v1/agents/status
-Content-Type: application/json
-
-{
-    "agent_id": "abc-123",
-    "agent_type": "inference",
-    "tags": ["gpu", "primary"],
-    "timestamp": "2026-01-28T12:00:00Z",
-    "started_at": "2026-01-28T11:00:00Z",
-    "uptime_seconds": 3600.0,
-    "status": "running",
-    "last_action": "Processed observation obs-456",
-    "last_action_at": "2026-01-28T11:59:55Z",
-    "items_processed": 142,
-    "queue_depth": 3,
-    "processing_time_avg_ms": 250.5,
-    "error_count": 2,
-    "memory_mb": 156.3,
-    "push_interval_seconds": 5.0
-}
-```
-
-**Response:**
-
-```json
-{
-    "received": true,
-    "push_interval_seconds": 5.0,
-    "server_time": "2026-01-28T12:00:00.123Z"
-}
-```
-
-The response includes the configured push interval, allowing the API to dynamically adjust agent reporting rates.
-
----
-
-## Push Rate Configuration
-
-### Storage (Redis)
-
-```
-# Per-agent config
-agent:config:{agent_id}:push_interval -> "5.0"
-
-# Per-type defaults
-agent:config:type:{agent_type}:push_interval -> "10.0"
-
-# Per-tag config (lowest interval wins if multiple tags)
-agent:config:tag:{tag}:push_interval -> "2.0"
-
-# Global default
-agent:config:default:push_interval -> "30.0"
-```
-
-### Resolution Order
-
-1. Per-agent config (most specific)
-2. Per-tag config (lowest interval if multiple tags match)
-3. Per-type config
-4. Global default (30 seconds)
-
-### API Endpoints for Configuration
-
-```
-# Get config for an agent
-GET /v1/agents/{agent_id}/config
-Response: {"push_interval_seconds": 5.0, "source": "tag:gpu"}
-
-# Set per-agent config
-PUT /v1/agents/{agent_id}/config
-Body: {"push_interval_seconds": 2.0}
-
-# Set per-type config
-PUT /v1/agents/config/type/{agent_type}
-Body: {"push_interval_seconds": 10.0}
-
-# Set per-tag config
-PUT /v1/agents/config/tag/{tag}
-Body: {"push_interval_seconds": 5.0}
-
-# Set global default
-PUT /v1/agents/config/default
-Body: {"push_interval_seconds": 30.0}
-
-# List all agents with current status
-GET /v1/agents
-Response: [{"agent_id": "...", "agent_type": "...", "status": "running", ...}]
-```
-
----
-
-## Agent Groups
-
-### Built-in Groups (by type)
-
-- `inference` - Inference agents
-- `validator` - Validator agents
-- `cli` - CLI instances
-
-### Custom Tags
-
-Agents can register with arbitrary tags:
+### PeerInfo (immutable identity)
 
 ```python
-# In agent startup
-await api.register_agent(
-    agent_type="inference",
-    tags=["gpu", "primary", "region-us-east"]
-)
+@dataclass(frozen=True)
+class PeerInfo:
+    node_id: str                        # "node-a3f8b2c1"
+    capabilities: frozenset[Capability] # {STORE, LLM}
+    http_url: str                       # "http://host:9000"
+    ws_url: str                         # "ws://host:9000/p2p/ws"
+    started_at: float
+    version: str = "0.3.0"
 ```
 
-### Querying by Group
+---
 
+## Heartbeat Mechanism
+
+Each node increments its own `heartbeat_seq` every 5 seconds and pushes its full peer table to `min(3, len(neighbors))` random neighbors via WebSocket gossip messages.
+
+```python
+# In GossipProtocol._gossip_loop()
+async def _gossip_loop(self):
+    while self._running:
+        self._increment_own_heartbeat()
+        targets = self._select_gossip_targets()
+        for target in targets:
+            await self._send_gossip(target)
+        await asyncio.sleep(self._interval)  # default 5s
 ```
-# All inference agents
-GET /v1/agents?type=inference
 
-# All agents with tag
-GET /v1/agents?tag=gpu
+### Convergence
 
-# Combined
-GET /v1/agents?type=inference&tag=primary
+Higher `heartbeat_seq` always wins when merging gossip:
+
+```python
+def _merge_peer_state(self, incoming: PeerState) -> bool:
+    existing = self._routing.get_peer(incoming.info.node_id)
+    if existing is None or incoming.heartbeat_seq > existing.heartbeat_seq:
+        self._routing.update_peer(incoming)
+        return True  # new information
+    return False
 ```
+
+Convergence time for N nodes: ~`log₃(N) × 5s`.
+
+---
+
+## Health Detection
+
+Each node runs a health check loop that monitors peer liveness:
+
+| Condition | Threshold | Action |
+|---|---|---|
+| No gossip from peer | 15 seconds | Mark `suspect` |
+| No gossip from peer | 30 seconds | Mark `dead`, remove from routing |
+| Gossip resumes | Any | Restore to `alive` |
+
+Dead peers are skipped by `RoutingTable.route_method()` and their WebSocket connections are replaced with new neighbors.
 
 ---
 
 ## Agent Lifecycle
 
-### Registration
+### Join
 
-On startup, agents register with the API:
+1. Node starts with `--bootstrap` URLs
+2. Sends `join` envelope to each bootstrap peer
+3. Receives `welcome` with list of known peers
+4. Opens WebSocket connections to up to 8 neighbors (preferring complementary capabilities)
+5. Begins gossip loop — all peers learn about the new node within seconds
 
-```
-POST /v1/agents/register
-{
-    "agent_type": "inference",
-    "tags": ["gpu"],
-    "hostname": "worker-1",
-    "pid": 12345
-}
+### Running
 
-Response:
-{
-    "agent_id": "inf-abc-123",
-    "push_interval_seconds": 10.0
-}
-```
+- Gossip propagates `PeerState` continuously
+- `heartbeat_seq` increments prove liveness without explicit heartbeat endpoints
+- Any node can query its local `RoutingTable` for the full network view
 
-### Heartbeat Loop
+### Leave (graceful)
 
-```python
-async def heartbeat_loop(self):
-    while self._running:
-        status = self._collect_status()
-        response = await self._api.post_status(status)
+1. Node sends `leave` envelope to all WebSocket neighbors
+2. Neighbors immediately mark peer as dead and propagate via gossip
+3. Network converges to remove the departed node
 
-        # Update interval if server changed it
-        self._push_interval = response.push_interval_seconds
+### Crash (ungraceful)
 
-        await asyncio.sleep(self._push_interval)
-```
-
-### Deregistration
-
-On graceful shutdown:
-
-```
-POST /v1/agents/{agent_id}/deregister
-```
-
-### Stale Detection
-
-Agents not sending heartbeats within 3x their push interval are marked `stale`. After 5x interval, marked `dead`.
+- No `leave` message sent
+- Neighbors detect missing heartbeats via health check loop
+- After 30s of silence, node is marked dead and removed
 
 ---
 
-## Redis Schema
+## Comparison with v0.2
 
-```
-# Agent status (expires after 5x push interval)
-agent:status:{agent_id} -> JSON(AgentStatus)
-TTL: push_interval * 5
-
-# Agent registry (persistent)
-agent:registry:{agent_id} -> JSON({agent_type, tags, registered_at})
-
-# Active agents set (for quick listing)
-agent:active -> SET of agent_ids
-
-# Status history (optional, for graphs)
-agent:history:{agent_id} -> ZSET (timestamp -> JSON snapshot)
-```
-
----
-
-## Implementation Plan
-
-### Phase 1: Core Status Reporting
-
-1. Add `AgentStatus` model to `src/models.py`
-2. Add status endpoints to `src/api.py`
-3. Add `AgentRegistry` class to `src/agent_registry.py` (Redis-backed)
-4. Update `WorkerAgent` base class with heartbeat loop
-5. Update inference/validator agents to report status
-
-### Phase 2: Push Rate Configuration
-
-1. Add config resolution logic to `AgentRegistry`
-2. Add config endpoints to API
-3. Update heartbeat loop to respect dynamic intervals
-
-### Phase 3: WebSocket Broadcasting
-
-1. Add WebSocket endpoint `/v1/ws/status`
-2. Broadcast status updates to connected clients
-3. Support filtered subscriptions (by type, tag)
+| Aspect | v0.2 (Centralized) | v0.3 (P2P) |
+|---|---|---|
+| Registry | Redis-backed `AgentRegistry` | Gossip-built `RoutingTable` |
+| Heartbeat | `POST /v1/agents/status` to API | `heartbeat_seq` in gossip |
+| Discovery | Static API URL | Seed node bootstrap + gossip |
+| Failure detection | 3x/5x push interval timeout | 15s suspect, 30s dead |
+| Push rate config | Server-controlled via Redis | Fixed gossip interval (5s) |
+| Single point of failure | API + Redis | None (fully decentralized) |
 
 ---
 
 ## Code References
 
-- `src/agents/base.py` - WorkerAgent base class (add heartbeat)
-- `src/api.py` - API endpoints (add status routes)
-- `src/agent_state.py` - AgentState (extend or create AgentRegistry)
-- `src/events.py` - EventBus (use for status broadcasts)
+- `src/p2p/types.py` — `PeerInfo`, `PeerState`, `Capability`
+- `src/p2p/gossip.py` — `GossipProtocol` (heartbeat + gossip loop)
+- `src/p2p/routing.py` — `RoutingTable` (peer tracking + capability routing)
+- `src/p2p/node.py` — `PeerNode` (health check loop, neighbor management)
+- `src/agents/base.py` — `WorkerAgent` (event-driven wakeup via `asyncio.Event`)
 
 ---
 
-*Document version: 0.1*
+*Document version: 0.2*
 *Last updated: 2026-01-28*

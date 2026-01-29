@@ -7,25 +7,53 @@ This document tracks tests for the Agentic Memory System — what's tested, what
 ## Running Tests
 
 ```bash
-# All tests (requires Neo4j + API key)
-pytest
+# Unit tests only (no external deps)
+make test-unit
 
-# Store tests only (requires Neo4j, no API key)
-pytest tests/test_store.py
+# All tests that don't need Neo4j or API key
+make test
 
-# Skip LLM tests (no API key needed)
-pytest -m "not llm"
+# Store tests (needs Neo4j)
+make test-store
 
-# Verbose with output
+# All tests (needs Neo4j + API key)
+make test-all
+
+# End-to-end in Docker (needs API key)
+make test-e2e
+
+# Verbose / single test
 pytest -v -s
-
-# Single test
-pytest tests/test_store.py::test_create_and_get_node
+pytest tests/test_p2p.py::TestRoutingTable::test_route_method_observe
 ```
 
 ---
 
 ## Test Inventory
+
+### `tests/test_p2p.py` — P2P Protocol Layer
+
+**Requires:** Nothing (unit tests)
+**API Key:** No
+
+| Test Class | Tests | What It Verifies |
+|------------|-------|------------------|
+| `TestCapability` | 2 | Enum values and string conversion |
+| `TestPeerInfo` | 3 | Frozen dataclass, serialization round-trip |
+| `TestPeerState` | 2 | Serialization round-trip, mutability |
+| `TestGenerateNodeId` | 2 | Format and uniqueness |
+| `TestEnvelope` | 3 | Defaults, serialization, unique IDs |
+| `TestRoutingTable` | 16 | Add/remove peers, capability routing, exclusions, dead filtering, last_seen refresh |
+| `TestMethodCapabilities` | 4 | Correct capability mapping for all MemoryAPI methods |
+| `TestLocalAgentState` | 7 | Processed sets, locks, independence |
+| `TestAdvertiseHost` | 2 | Advertise host overrides listen host in PeerInfo URLs |
+| `TestNodeDispatch` | 8 | Ping/pong, join/welcome, leave, gossip, dedup, request handling, events |
+| `TestP2PMemoryClient` | 8 | Local execution, remote failure, all MemoryAPI methods |
+| `TestWorkerAgent` | 1 | Event-driven wakeup |
+
+**Status:** ✅ Passing (58 tests)
+
+---
 
 ### `tests/test_prompts.py` — Prompt Template System
 
@@ -70,20 +98,20 @@ pytest tests/test_store.py::test_create_and_get_node
 | `test_find_recent_observations` | Timestamp ordering, limit |
 | `test_clear_all` | Database wipe |
 
-**Status:** ✅ Passing (10 tests)
+**Status:** ✅ Passing (10 tests, needs Neo4j)
 
 ---
 
 ### `tests/test_llm.py` — Claude API Translation Layer
 
-**Requires:** Neo4j + `ANTHROPIC_API_KEY`
+**Requires:** `ANTHROPIC_API_KEY`
 **Markers:** `@pytest.mark.llm`
 
 | Test | What It Verifies |
 |------|------------------|
-| `test_extract_observation` | Observation text → ObservationData (entities, extractions, topics) |
-| `test_parse_claim` | Claim text → ClaimData (subject, predicate, object, confidence) |
-| `test_parse_claim_with_contradiction` | Detects contradiction language in claim |
+| `test_extract_observation` | Observation text → ObservationData |
+| `test_parse_claim` | Claim text → ClaimData |
+| `test_parse_claim_with_contradiction` | Detects contradiction language |
 | `test_generate_query` | Natural language → Cypher query |
 | `test_synthesize_response` | Graph results → natural language answer |
 
@@ -116,7 +144,7 @@ pytest tests/test_store.py::test_create_and_get_node
 |------|------------------|
 | `test_meeting_preferences_scenario` | Full flow: observe → infer → contradict → remember |
 
-**Status:** ✅ Passing (1 test) — tests in-process mode; distributed mode not yet tested
+**Status:** ✅ Passing (1 test)
 
 ---
 
@@ -126,29 +154,12 @@ pytest tests/test_store.py::test_create_and_get_node
 
 | Component | File | Priority | Notes |
 |-----------|------|----------|-------|
-| **API Endpoints** | `src/api.py` | HIGH | No `test_api.py` yet |
-| **Agent Registry** | `src/agent_registry.py` | HIGH | Registration, heartbeat, push rate config |
-| **WebSocket Manager** | `src/websocket_manager.py` | HIGH | Connection management, broadcasting |
-| **HTTP Client** | `src/api_client.py` | MEDIUM | Should test against mock/real API |
-| **EventBus** | `src/events.py` | MEDIUM | Redis pub/sub |
-| **AgentState** | `src/agent_state.py` | MEDIUM | Redis sets + distributed locks |
-| **InferenceAgent** | `src/agents/inference.py` | MEDIUM | Agent logic |
-| **ValidatorAgent** | `src/agents/validator.py` | MEDIUM | Contradiction detection |
+| **Transport layer** | `src/p2p/transport.py` | MEDIUM | Server start/stop, WebSocket connections (needs real network) |
+| **Gossip convergence** | `src/p2p/gossip.py` | MEDIUM | Multi-node gossip propagation (integration test) |
+| **Multi-node e2e** | `run_node.py` | HIGH | Full P2P network with real nodes |
+| **InferenceAgent** | `src/agents/inference.py` | MEDIUM | Agent processing logic with mock memory |
+| **ValidatorAgent** | `src/agents/validator.py` | MEDIUM | Contradiction detection logic |
 | **CLI** | `src/cli.py` | LOW | Interactive, hard to test |
-
-### Recently Added
-
-| Test File | Tests | Notes |
-|-----------|-------|-------|
-| `test_prompts.py` | 13 | Full coverage of prompt template system |
-| `conftest.py` | — | Loads .env, registers custom markers |
-
-### Future Improvements
-
-| Test File | Improvement | Notes |
-|-----------|-------------|-------|
-| `test_integration.py` | Add distributed mode variant | Currently only tests in-process |
-| `test_api.py` | Create | Test HTTP endpoints with TestClient |
 
 ---
 
@@ -185,89 +196,5 @@ pytest tests/test_store.py::test_create_and_get_node
 
 ---
 
-## Test Plan: API Endpoints
-
-Priority tests to add for `src/api.py`:
-
-```python
-# tests/test_api.py
-
-async def test_health_endpoint():
-    """GET /v1/health returns 200."""
-
-async def test_observe_endpoint():
-    """POST /v1/observe creates observation."""
-
-async def test_claim_endpoint():
-    """POST /v1/claim creates claim."""
-
-async def test_remember_endpoint():
-    """POST /v1/remember returns response."""
-
-async def test_infer_endpoint():
-    """POST /v1/infer returns claim or null."""
-
-async def test_recent_observations():
-    """GET /v1/observations/recent returns list."""
-
-async def test_recent_claims():
-    """GET /v1/claims/recent returns list."""
-
-async def test_clear_endpoint():
-    """POST /v1/admin/clear wipes database."""
-```
-
-## Test Plan: Agent Registry
-
-Priority tests to add for `src/agent_registry.py`:
-
-```python
-# tests/test_agent_registry.py
-
-async def test_register_agent():
-    """Register returns agent_id and push_interval."""
-
-async def test_deregister_agent():
-    """Deregistered agent no longer in list."""
-
-async def test_update_and_get_status():
-    """Status heartbeat stored and retrievable."""
-
-async def test_list_agents_filter_by_type():
-    """Filter agents by type."""
-
-async def test_list_agents_filter_by_tag():
-    """Filter agents by tag."""
-
-async def test_push_interval_resolution_order():
-    """agent > tag > type > default resolution."""
-
-async def test_stale_detection():
-    """Agent marked stale after 3x interval."""
-
-async def test_status_listener_callback():
-    """Listener called on status update."""
-```
-
-## Test Plan: WebSocket Manager
-
-```python
-# tests/test_websocket_manager.py
-
-async def test_connect_and_disconnect():
-    """Client connects and disconnects cleanly."""
-
-async def test_broadcast_to_subscribed():
-    """Message reaches subscribed clients."""
-
-async def test_channel_filter():
-    """Client only receives subscribed channels."""
-
-async def test_agent_type_filter():
-    """Client filters by agent type."""
-```
-
----
-
-*Document version: 0.1*
+*Document version: 0.2*
 *Last updated: 2026-01-28*

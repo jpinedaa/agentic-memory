@@ -1211,5 +1211,221 @@ Event flow:
 - [ ] Scale test: verify exactly-once processing with multiple inference agents
 - [ ] SSE event stream testing
 - [ ] Add monitoring/observability (structured logging, health metrics)
-- [ ] Evaluate agent framework swappability (LangGraph, CrewAI, Claude Agent SDK)
+- [x] ~~Evaluate agent framework swappability~~ (superseded by P2P architecture in v0.3)
 - [ ] Consider persistence/recovery strategies (what happens when agents restart mid-processing)
+
+---
+
+## 14. Peer-to-Peer Architecture (v0.3)
+
+### 14.1 Motivation
+
+v0.2 used a hub-and-spoke topology: a centralized FastAPI server + Redis broker, with agents as thin HTTP clients. This had limitations:
+
+- **Single point of failure**: API server down = entire system down
+- **Centralized bottleneck**: All requests funneled through one server
+- **Agents are second-class**: They can't talk to each other or access capabilities directly
+- **Infrastructure dependency**: Redis required for coordination even though its role was simple
+
+v0.3 replaces this with a peer-to-peer network where every node is identical in networking (HTTP server + WebSocket + HTTP client) and differs only in capabilities.
+
+### 14.2 Architecture Diagram
+
+```
+     ┌─────────────────────────────────────┐
+     │            PeerNode                 │
+     │                                     │
+     │  ┌───────────┐  ┌────────────────┐  │
+     │  │ Transport  │  │  Application   │  │
+     │  │ Server     │  │  (capabilities)│  │
+     │  │ (FastAPI)  │  │  Store/LLM/    │  │
+     │  │ HTTP + WS  │  │  Inference/etc │  │
+     │  └───────────┘  └────────────────┘  │
+     │  ┌───────────┐  ┌────────────────┐  │
+     │  │ Transport  │  │  Gossip +      │  │
+     │  │ Client     │  │  Routing Table │  │
+     │  │ (httpx+ws) │  │                │  │
+     │  └───────────┘  └────────────────┘  │
+     └─────────────────────────────────────┘
+```
+
+Every node runs this same structure. Communication:
+
+```
+  Store+LLM Node ◄──WS──► Inference Node
+       ▲                        ▲
+       │                        │
+      WS                      WS
+       │                        │
+       ▼                        ▼
+  CLI Node ◄────WS────► Validator Node
+```
+
+Nodes discover each other via bootstrap seed URLs, maintain WebSocket neighbor connections (up to 8), and propagate state via gossip.
+
+### 14.3 Key Design Decisions
+
+| Decision | Choice | Rationale |
+|----------|--------|-----------|
+| Transport | HTTP + WebSocket | Universal, works across internet, FastAPI supports both natively |
+| Discovery | Seed node URLs | Simple, works across internet, no multicast needed |
+| State propagation | Push-based gossip | Decentralized, convergent, evolvable |
+| Coordination | Local state per node | Append-only store makes duplicate processing harmless |
+| Node identity | Capability-based | Nodes differ only in what they can do, not in how they communicate |
+| Interface contract | `MemoryAPI` Protocol (unchanged) | `P2PMemoryClient` satisfies same protocol as old `MemoryClient` |
+| Infrastructure | No Redis | Gossip replaces pub/sub, local state replaces Redis SETs |
+
+### 14.4 Components
+
+#### Node Types (by capability)
+
+| Capability | What it provides | Dependencies |
+|---|---|---|
+| `store` | Neo4j access (observe, claim, query) | Neo4j |
+| `llm` | Claude API (infer, parse claims) | Anthropic API key |
+| `inference` | InferenceAgent logic | Needs `store`+`llm` peer |
+| `validation` | ValidatorAgent logic | Needs `store` peer |
+| `cli` | Interactive user I/O | Needs `store`+`llm` peer |
+
+#### Protocol Layer (`src/p2p/`)
+
+| File | Purpose |
+|---|---|
+| `types.py` | `PeerInfo` (identity), `PeerState` (mutable status), `Capability` enum |
+| `messages.py` | `Envelope` — universal message wrapper for all P2P communication |
+| `routing.py` | `RoutingTable` — maps MemoryAPI methods to capable peers |
+| `transport.py` | `TransportServer` (FastAPI) + `TransportClient` (httpx + websockets) |
+| `gossip.py` | Push-based gossip — fanout to 3 random neighbors every 5s |
+| `node.py` | `PeerNode` — core runtime: lifecycle, dispatch, neighbor management |
+| `memory_client.py` | `P2PMemoryClient` — implements `MemoryAPI` via capability-based routing |
+| `local_state.py` | `LocalAgentState` — replaces Redis-backed `AgentState` |
+
+#### Message Types
+
+| Type | Direction | Purpose |
+|---|---|---|
+| `join` / `welcome` | new → seed | Bootstrap discovery |
+| `gossip` | neighbor → neighbor | Peer state propagation |
+| `request` / `response` | caller → capable peer | MemoryAPI RPC |
+| `event` | originator → flood | Observation/claim broadcast (TTL-limited) |
+| `ping` / `pong` | peer ↔ peer | Liveness check |
+| `leave` | departing → neighbors | Graceful shutdown |
+
+### 14.5 File Structure (v0.3)
+
+```
+agentic-memory/
+├── docker-compose.yml              # Full stack: neo4j + P2P nodes
+├── docker-compose.test.yml         # E2E test overlay
+├── Dockerfile
+├── Makefile                        # Deployment targets
+├── pyproject.toml                  # v0.3.0
+├── src/
+│   ├── p2p/                        # P2P protocol layer
+│   │   ├── types.py
+│   │   ├── messages.py
+│   │   ├── routing.py
+│   │   ├── transport.py
+│   │   ├── gossip.py
+│   │   ├── node.py
+│   │   ├── memory_client.py
+│   │   └── local_state.py
+│   ├── store.py                    # Neo4j (unchanged)
+│   ├── llm.py                      # Claude API (unchanged)
+│   ├── interfaces.py               # MemoryService (unchanged)
+│   ├── memory_protocol.py          # MemoryAPI Protocol (unchanged)
+│   ├── prompts.py                  # Prompt loader (unchanged)
+│   ├── agents/
+│   │   ├── base.py                 # WorkerAgent (updated: P2P events)
+│   │   ├── inference.py            # InferenceAgent (updated: no EventBus)
+│   │   └── validator.py            # ValidatorAgent (updated: no EventBus)
+│   └── cli.py                      # CLI (unchanged)
+├── run_node.py                     # Unified P2P node entry point
+├── main.py                         # Dev mode (in-process P2P nodes)
+└── tests/
+    ├── test_p2p.py                 # P2P unit tests (54 tests)
+    ├── test_prompts.py             # Prompt tests (13 tests)
+    ├── test_store.py               # Store tests (10 tests)
+    ├── test_llm.py                 # LLM tests (5 tests)
+    ├── test_interfaces.py          # Interface tests (4 tests)
+    └── test_integration.py         # E2E scenario (1 test)
+```
+
+#### Removed from v0.2
+
+- `src/api.py` → replaced by per-node `TransportServer`
+- `src/api_client.py` → replaced by `P2PMemoryClient`
+- `src/events.py` → replaced by P2P event broadcasting
+- `src/agent_state.py` → replaced by `LocalAgentState`
+- `src/agent_registry.py` → replaced by `RoutingTable` + gossip
+- `src/websocket_manager.py` → replaced by per-node WS
+- `run_inference_agent.py`, `run_validator_agent.py`, `run_cli.py` → unified `run_node.py`
+- Redis dependency → eliminated
+
+### 14.6 Running Modes
+
+#### Dev Mode (single process)
+
+```bash
+make dev    # or: docker compose up neo4j -d && python main.py
+```
+
+Spawns 4 PeerNodes in-process on localhost (ports 9000-9003).
+
+#### Distributed Mode (multi-node)
+
+```bash
+make docker-up    # or: docker compose up --build -d
+
+# Or manually:
+python run_node.py --capabilities store,llm --port 9000
+python run_node.py --capabilities inference --port 9001 --bootstrap http://localhost:9000
+python run_node.py --capabilities validation --port 9002 --bootstrap http://localhost:9000
+python run_node.py --capabilities cli --port 9003 --bootstrap http://localhost:9000
+```
+
+#### Scaled Mode
+
+```bash
+make docker-scale-inference N=3
+```
+
+### 14.7 P2P Data Flow
+
+```
+1. CLI Node sends "request" envelope (method=observe) to a store+llm peer
+2. Store+LLM Node executes MemoryService.observe(), writes to Neo4j
+3. Store+LLM Node broadcasts "event" (type=observe) to all neighbors
+4. Event floods through network (TTL=3, msg_id dedup)
+5. Inference Node receives event, wakes up, calls process()
+6. Inference Node sends "request" (method=get_recent_observations) to store peer
+7. Inference Node sends "request" (method=infer) to llm peer
+8. Inference Node sends "request" (method=claim) to store+llm peer
+9. Store+LLM Node broadcasts "event" (type=claim)
+10. Validator Node receives claim event, checks for contradictions
+```
+
+### 14.8 Implementation Status (v0.3)
+
+| Phase | Status | Notes |
+|-------|--------|-------|
+| 1. Core types + messages + routing | Done | `src/p2p/types.py`, `messages.py`, `routing.py` |
+| 2. Transport layer | Done | `src/p2p/transport.py` (FastAPI + httpx + websockets) |
+| 3. Gossip protocol | Done | `src/p2p/gossip.py` (push-based, fanout=3, interval=5s) |
+| 4. PeerNode runtime | Done | `src/p2p/node.py` (lifecycle, dispatch, neighbors) |
+| 5. P2PMemoryClient | Done | `src/p2p/memory_client.py` (satisfies MemoryAPI) |
+| 6. Agent updates | Done | Removed EventBus/Redis deps, event-driven via P2P |
+| 7. Entry points | Done | `run_node.py`, updated `main.py` |
+| 8. Unit tests | Done | 54 tests in `tests/test_p2p.py` |
+| 9. Makefile + Docker | Done | Deployment targets, test overlay |
+
+### 14.9 Open Items
+
+- [ ] Multi-node integration test (start real nodes, verify full flow)
+- [ ] Reconnect UI dashboard to P2P topology
+- [ ] NAT traversal for cross-internet deployment
+- [ ] TLS on all connections (HTTPS + WSS)
+- [ ] Node authentication and capability attestation
+- [ ] Persistent routing table (survive restarts)
+- [ ] Bandwidth-aware routing (prefer faster peers)
+- [ ] Consistent hashing for deterministic observation→agent routing

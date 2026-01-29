@@ -2,23 +2,23 @@
 
 ## Project Briefing
 
-This is a shared memory substrate where multiple AI agents interact via natural language, with a Neo4j graph database storing knowledge as triples (observations, claims, entities). The system evolved from a single-process prototype (v0.1) to a fully distributed architecture (v0.2) with FastAPI, Redis pub/sub, and containerized agents. Distributed mode is functional (`docker compose up`) and the core observe/claim/remember flow works.
+This is a shared memory substrate where multiple AI agents interact via natural language, with a Neo4j graph database storing knowledge as triples (observations, claims, entities). The system uses a peer-to-peer architecture (v0.3) where every node is identical in networking (HTTP server + WebSocket + HTTP client) and differs only in capabilities (store, LLM, inference, validation, CLI). Nodes discover each other via seed URLs, maintain WebSocket neighbor connections, and propagate state via gossip. No centralized API server or Redis — all coordination is peer-to-peer.
 
-**Just completed:** Built agent status reporting + real-time visual UI system. Agents now register with the API, send heartbeat status (full metrics), with configurable push rates (per-agent, per-type, per-tag). WebSocket endpoint broadcasts updates to connected UI clients. React + D3.js dashboard with three panels: Agent Topology (force-directed graph), Event Stream (live events), and Knowledge Graph (Neo4j visualization). UI runs as separate Docker container on port 3000.
+**Just completed:** Replaced the centralized FastAPI + Redis architecture (v0.2) with a P2P protocol layer. Each node runs its own HTTP+WS server, discovers peers via bootstrap, and routes MemoryAPI calls to capable peers. Gossip protocol propagates peer state. Event broadcasting replaces Redis pub/sub. A real-time React + D3.js dashboard (port 3000) visualizes the system.
 
-**Next up:** Test full stack end-to-end with `docker compose up` (includes new `ui` service). Add tests for `src/agent_registry.py` and `src/websocket_manager.py`. See `docs/agent_status_pattern.md` and `docs/visual_ui_design.md` for design decisions.
+**Next up:** Add tests for `src/p2p/` modules. Reconnect the UI dashboard to the P2P topology. See `docs/visual_ui_design.md` for UI design decisions.
 
 ## Project Overview
 
 A shared memory substrate where multiple agents interact via natural language, backed by a Neo4j graph database storing triples. See `docs/design_tracking.md` for full design and architecture.
 
-Core API: `MemoryAPI` protocol in `src/memory_protocol.py` — implemented by both `MemoryService` (in-process) and `MemoryClient` (HTTP).
+Core API: `MemoryAPI` protocol in `src/memory_protocol.py` — implemented by `MemoryService` (in-process) and `P2PMemoryClient` (peer-to-peer routing).
 
 ## Running Modes
 
 ### Dev Mode (single process)
 
-Everything runs in one process via asyncio. No Redis required.
+Spawns all P2P nodes in-process on localhost with different ports.
 
 ```bash
 python3 -m venv .venv
@@ -29,23 +29,31 @@ cp .env.example .env             # edit with your API key
 python main.py
 ```
 
-### Distributed Mode (multi-process)
+### Distributed Mode (multi-node)
 
-API server + agents as separate processes. Requires Redis.
+Each node is a separate process. No Redis required.
 
 ```bash
 # Option A: Docker (full stack)
 docker compose up
 
 # Option B: Local processes
-docker compose up neo4j redis -d
-uvicorn src.api:app --port 8000                    # terminal 1
-python run_inference_agent.py                       # terminal 2
-python run_validator_agent.py                       # terminal 3
-python run_cli.py                                   # terminal 4
+docker compose up neo4j -d
+
+# Terminal 1: Store + LLM node
+python run_node.py --capabilities store,llm --port 9000
+
+# Terminal 2: Inference node
+python run_node.py --capabilities inference --port 9001 --bootstrap http://localhost:9000
+
+# Terminal 3: Validator node
+python run_node.py --capabilities validation --port 9002 --bootstrap http://localhost:9000
+
+# Terminal 4: CLI node
+python run_node.py --capabilities cli --port 9003 --bootstrap http://localhost:9000
 ```
 
-Scale agents: `docker compose up --scale inference-agent=3`
+Scale agents: `docker compose up --scale inference-node=3`
 
 ### CLI Usage
 
@@ -71,35 +79,36 @@ pytest                            # all tests (needs Neo4j + API key)
 | `NEO4J_URI` | `bolt://localhost:7687` | Neo4j connection |
 | `NEO4J_USERNAME` | `neo4j` | Neo4j username |
 | `NEO4J_PASSWORD` | `memory-system` | Neo4j password |
-| `REDIS_URL` | `redis://localhost:6379` | Redis connection |
 | `LLM_MODEL` | `claude-sonnet-4-20250514` | Claude model |
-| `API_BASE_URL` | `http://localhost:8000` | API server URL (for agents/CLI) |
+| `NODE_PORT` | `9000` | Node listen port |
+| `NODE_HOST` | `0.0.0.0` | Node bind host |
+| `BOOTSTRAP_PEERS` | (none) | Comma-separated bootstrap peer URLs |
 | `POLL_INTERVAL` | `30` | Agent poll fallback interval (seconds) |
 
 ## Architecture
 
 ```
-src/memory_protocol.py  → MemoryAPI protocol (shared contract)
-src/interfaces.py       → MemoryService (in-process implementation)
-src/api.py              → FastAPI server (HTTP boundary)
-src/api_client.py       → MemoryClient (HTTP implementation)
-src/events.py           → EventBus (Redis pub/sub)
-src/agent_state.py      → AgentState (Redis-backed sets + distributed locks)
-src/llm.py              → Claude API translation layer (tool_use)
-src/prompts.py          → Prompt template loader (YAML + Jinja2 + Pydantic)
-src/agent_registry.py   → Agent registration + status tracking (Redis)
-src/websocket_manager.py → WebSocket connection manager for UI
-src/store.py            → Neo4j async wrapper
-prompts/                → YAML prompt templates (organized by agent)
-src/cli.py              → stdin/stdout chat adapter
-src/agents/base.py      → WorkerAgent ABC (event-driven + poll fallback)
-src/agents/inference.py → observations → claims
-src/agents/validator.py → contradiction detection
-main.py                 → dev mode (in-process, asyncio.gather)
-run_inference_agent.py  → distributed inference agent entry point
-run_validator_agent.py  → distributed validator agent entry point
-run_cli.py              → distributed CLI entry point
-ui/                     → React + D3.js dashboard (separate container, port 3000)
+src/p2p/types.py        → PeerInfo, PeerState, Capability enum
+src/p2p/messages.py      → Envelope (universal message wrapper)
+src/p2p/routing.py       → RoutingTable + capability-based method routing
+src/p2p/transport.py     → TransportServer (FastAPI) + TransportClient (httpx/ws)
+src/p2p/gossip.py        → GossipProtocol (push-based, fanout to neighbors)
+src/p2p/node.py          → PeerNode (core runtime, lifecycle, dispatch)
+src/p2p/memory_client.py → P2PMemoryClient (implements MemoryAPI via peer routing)
+src/p2p/local_state.py   → LocalAgentState (replaces Redis AgentState)
+src/memory_protocol.py   → MemoryAPI protocol (shared contract)
+src/interfaces.py        → MemoryService (in-process implementation)
+src/llm.py               → Claude API translation layer (tool_use)
+src/prompts.py           → Prompt template loader (YAML + Jinja2 + Pydantic)
+src/store.py             → Neo4j async wrapper
+prompts/                 → YAML prompt templates (organized by agent)
+src/cli.py               → stdin/stdout chat adapter
+src/agents/base.py       → WorkerAgent ABC (event-driven + poll fallback)
+src/agents/inference.py  → observations → claims
+src/agents/validator.py  → contradiction detection
+main.py                  → dev mode (in-process, multiple P2P nodes)
+run_node.py              → unified distributed node entry point
+ui/                      → React + D3.js dashboard (separate container, port 3000)
 ```
 
 ## Development
@@ -111,7 +120,7 @@ ui/                     → React + D3.js dashboard (separate container, port 30
 source .venv/bin/activate
 
 # Or use Docker for containerized execution
-docker compose exec api python ...
+docker compose exec store-node python ...
 ```
 
 All `python`, `pytest`, `pip`, and other Python commands must be run either:
@@ -124,10 +133,41 @@ Never run Python commands directly without the venv activated.
 
 - Do not worry about backward compatibility unless explicitly stated. When making updates, also update relevant code, design docs (`docs/design_tracking.md`), and tests.
 - All external access goes through the `MemoryAPI` protocol. Never access `.store` or `.llm` directly from agents or CLI.
-- Agents must work with both `MemoryService` (in-process) and `MemoryClient` (HTTP). Use the protocol, not concrete types.
-- Agent state (`_processed_obs`, `_checked_pairs`) uses `AgentState` (Redis) or `InMemoryAgentState` (dev). Never use raw Python sets for tracking.
+- Agents receive `P2PMemoryClient` as their `memory` parameter. Use the protocol, not concrete types.
+- Agent state (`_processed_obs`, `_checked_pairs`) uses `LocalAgentState`. Never use raw Python sets for tracking.
 - All store and interface methods are async.
 - Tests marked `@pytest.mark.llm` require a live Claude API key. Store tests only need Neo4j.
+
+## P2P Protocol
+
+### Node Types (by capability)
+
+| Capability | What it provides | Dependencies |
+|---|---|---|
+| `store` | Neo4j access (observe, claim, query) | Neo4j |
+| `llm` | Claude API (infer, parse claims) | Anthropic API key |
+| `inference` | InferenceAgent logic | Needs `store`+`llm` peer |
+| `validation` | ValidatorAgent logic | Needs `store` peer |
+| `cli` | Interactive user I/O | Needs `store`+`llm` peer |
+
+### Communication
+
+- **HTTP POST** `/p2p/message` — request/response envelope exchange
+- **WebSocket** `/p2p/ws` — persistent bidirectional for gossip + events
+- **GET** `/p2p/health` — liveness check
+- **Gossip** — push-based, every 5s, fanout to 3 random neighbors
+- **Events** — flooded to neighbors with TTL-based hop limit + msg_id dedup
+
+### Message Types
+
+| Type | Purpose |
+|---|---|
+| `join` / `welcome` | Bootstrap discovery |
+| `gossip` | Peer state propagation |
+| `request` / `response` | MemoryAPI RPC |
+| `event` | Observation/claim broadcast |
+| `ping` / `pong` | Liveness |
+| `leave` | Graceful shutdown |
 
 ## Prompt System
 

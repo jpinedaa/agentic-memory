@@ -2,11 +2,11 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-COPY pyproject.toml requirements.txt ./
-RUN pip install --no-cache-dir -e ".[distributed]"
+COPY pyproject.toml ./
+RUN pip install --no-cache-dir -e .
 
 COPY src/ src/
 COPY prompts/ prompts/
-COPY main.py run_inference_agent.py run_validator_agent.py run_cli.py ./
+COPY main.py run_node.py ./
 
-CMD ["uvicorn", "src.api:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["python", "run_node.py", "--capabilities", "store,llm", "--port", "9000"]

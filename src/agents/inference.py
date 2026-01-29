@@ -1,8 +1,8 @@
 """Inference agent: converts observations into claims.
 
 Monitors new observations and generates inferred claims
-via the MemoryAPI.infer() method. Uses AgentState for
-persistent tracking and EventBus for event-driven wakeup.
+via the MemoryAPI.infer() method. Uses LocalAgentState for
+idempotency tracking.
 """
 
 from __future__ import annotations
@@ -12,11 +12,9 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 from src.agents.base import WorkerAgent
-from src.events import CHANNEL_OBSERVATION
 
 if TYPE_CHECKING:
-    from src.agent_state import AgentState, InMemoryAgentState
-    from src.events import EventBus
+    from src.p2p.local_state import LocalAgentState
     from src.memory_protocol import MemoryAPI
 
 logger = logging.getLogger(__name__)
@@ -31,21 +29,19 @@ class InferenceAgent(WorkerAgent):
         self,
         memory: MemoryAPI,
         poll_interval: float = 30.0,
-        event_bus: EventBus | None = None,
-        state: AgentState | InMemoryAgentState | None = None,
+        state: LocalAgentState | None = None,
     ) -> None:
         super().__init__(
             source_id="inference_agent",
             memory=memory,
             poll_interval=poll_interval,
-            event_bus=event_bus,
             state=state,
             agent_type="inference",
         )
         self._inference_started_at = datetime.now(timezone.utc).isoformat()
 
-    def event_channels(self) -> list[str]:
-        return [CHANNEL_OBSERVATION]
+    def event_types(self) -> list[str]:
+        return ["observe"]
 
     async def process(self) -> list[str]:
         """Check for unprocessed observations and infer claims."""
@@ -62,7 +58,7 @@ class InferenceAgent(WorkerAgent):
                     await self.state.mark_processed(STATE_KEY, obs_id)
                 continue
 
-            # Check if already processed (Redis or in-memory)
+            # Check if already processed
             if self.state and await self.state.is_processed(STATE_KEY, obs_id):
                 continue
 

@@ -68,25 +68,28 @@ RETURN obs.raw_content, obs.source, obs.timestamp
 
 ---
 
-## 2. Agent Status Pattern (Redis, not Neo4j)
+## 2. Agent Status Pattern (P2P Gossip)
 
-**Purpose**: Track agent lifecycle, heartbeat status, and push rate configuration. Stored in Redis (not Neo4j) because it's ephemeral operational data.
+**Purpose**: Track node lifecycle and health across the P2P network. Stored in-memory in each node's `RoutingTable` — no external database needed.
 
-**Storage**:
+**Data**:
 
+```python
+PeerState:
+    info: PeerInfo           # node_id, capabilities, URLs, version
+    status: str              # alive | suspect | dead
+    last_seen: float         # timestamp of last gossip
+    heartbeat_seq: int       # monotonic counter (owner increments)
+    metadata: dict           # extensible
 ```
-agent:registry:{agent_id}   → JSON registration (persistent)
-agent:status:{agent_id}     → JSON status heartbeat
-agent:active                 → SET of active agent_ids
-agent:config:*               → Push rate configuration
-```
 
-**Resolution order** for push rates: per-agent > per-tag > per-type > global default.
+Each node builds its own view of the network from gossip messages. Higher `heartbeat_seq` always wins when merging.
 
 **Code references**:
-- `src/agent_registry.py` → `AgentRegistry`, `AgentStatus`
-- `src/agents/base.py` → `WorkerAgent._heartbeat_loop()`
-- `src/api.py` → `/v1/agents/*` endpoints
+- `src/p2p/types.py` → `PeerInfo`, `PeerState`, `Capability`
+- `src/p2p/gossip.py` → `GossipProtocol` (heartbeat + push-based gossip)
+- `src/p2p/routing.py` → `RoutingTable` (peer tracking + capability routing)
+- `src/p2p/node.py` → `PeerNode` (health check loop, neighbor management)
 
 See `docs/agent_status_pattern.md` for full design.
 
