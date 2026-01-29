@@ -5,7 +5,8 @@ import type { AgentStatus } from '../../types';
 
 const AGENT_COLORS: Record<string, string> = {
   inference: '#58a6ff',
-  validator: '#3fb950',
+  validation: '#3fb950',
+  store: '#bc8cff',
   cli: '#d29922',
   unknown: '#8b949e',
 };
@@ -22,7 +23,6 @@ const STATUS_COLORS: Record<string, string> = {
 interface NodeDatum extends d3.SimulationNodeDatum {
   id: string;
   type: string;
-  isApi: boolean;
   status?: AgentStatus;
 }
 
@@ -57,7 +57,7 @@ function Legend() {
       }}
     >
       <div style={{ fontWeight: 600, fontSize: '10px', marginBottom: '2px', color: 'var(--text-primary)' }}>
-        Agent Types
+        Node Types
       </div>
       {Object.entries(AGENT_COLORS).filter(([k]) => k !== 'unknown').map(([type, color]) => (
         <div key={type} style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
@@ -147,21 +147,9 @@ export function AgentTopology({ maximized, onToggleMaximize }: Props) {
     feMerge.append('feMergeNode').attr('in', 'coloredBlur');
     feMerge.append('feMergeNode').attr('in', 'SourceGraphic');
 
-    const gradient = defs.append('radialGradient').attr('id', 'api-gradient');
-    gradient.append('stop').attr('offset', '0%').attr('stop-color', '#58a6ff').attr('stop-opacity', '0.4');
-    gradient.append('stop').attr('offset', '100%').attr('stop-color', '#58a6ff').attr('stop-opacity', '0.05');
-
     // Main group (zoom/pan target)
     const g = svg.append('g');
     gRef.current = g;
-
-    // API background glow
-    g.append('circle')
-      .attr('class', 'api-glow')
-      .attr('cx', width / 2)
-      .attr('cy', height / 2)
-      .attr('r', 50)
-      .attr('fill', 'url(#api-gradient)');
 
     // Groups for links and nodes
     g.append('g').attr('class', 'links-group');
@@ -184,12 +172,13 @@ export function AgentTopology({ maximized, onToggleMaximize }: Props) {
       .attr('class', 'tooltip')
       .style('display', 'none');
 
-    // Simulation
+    // Simulation — P2P mesh layout
     const simulation = d3
       .forceSimulation<NodeDatum>([])
-      .force('link', d3.forceLink<NodeDatum, LinkDatum>([]).id((d) => d.id).distance(100))
-      .force('charge', d3.forceManyBody().strength(-200))
-      .force('center', d3.forceCenter(width / 2, height / 2));
+      .force('link', d3.forceLink<NodeDatum, LinkDatum>([]).id((d) => d.id).distance(120))
+      .force('charge', d3.forceManyBody().strength(-300))
+      .force('center', d3.forceCenter(width / 2, height / 2))
+      .force('collision', d3.forceCollide().radius(30));
 
     simulationRef.current = simulation;
     initializedRef.current = true;
@@ -210,8 +199,6 @@ export function AgentTopology({ maximized, onToggleMaximize }: Props) {
     const tooltip = tooltipRef.current;
     if (!simulation || !g || !tooltip || dimensions.width === 0) return;
 
-    const { width, height } = dimensions;
-
     // Build new node/link data, preserving positions of existing nodes
     const existingPositions = new Map<string, { x: number; y: number; fx?: number | null; fy?: number | null }>();
     for (const n of nodesRef.current) {
@@ -220,32 +207,28 @@ export function AgentTopology({ maximized, onToggleMaximize }: Props) {
       }
     }
 
-    const newNodes: NodeDatum[] = [
-      {
-        id: 'api',
-        type: 'api',
-        isApi: true,
-        ...existingPositions.get('api') || { x: width / 2, y: height / 2 },
-        fx: width / 2,
-        fy: height / 2,
-      },
-      ...agents.map((a) => {
-        const existing = existingPositions.get(a.agent_id);
-        return {
-          id: a.agent_id,
-          type: a.agent_type,
-          isApi: false,
-          status: a,
-          ...(existing || {}),
-        };
-      }),
-    ];
+    // All agents are equal peers in the P2P network
+    const newNodes: NodeDatum[] = agents.map((a) => {
+      const existing = existingPositions.get(a.agent_id);
+      return {
+        id: a.agent_id,
+        type: a.agent_type,
+        status: a,
+        ...(existing || {}),
+      };
+    });
 
-    const newLinks: LinkDatum[] = agents.map((a) => ({
-      id: `link-${a.agent_id}`,
-      source: 'api',
-      target: a.agent_id,
-    }));
+    // Full mesh: every peer connects to every other peer (gossip protocol)
+    const newLinks: LinkDatum[] = [];
+    for (let i = 0; i < newNodes.length; i++) {
+      for (let j = i + 1; j < newNodes.length; j++) {
+        newLinks.push({
+          id: `link-${newNodes[i].id}-${newNodes[j].id}`,
+          source: newNodes[i].id,
+          target: newNodes[j].id,
+        });
+      }
+    }
 
     nodesRef.current = newNodes;
     linksRef.current = newLinks;
@@ -266,8 +249,8 @@ export function AgentTopology({ maximized, onToggleMaximize }: Props) {
     const linkEnter = link.enter()
       .append('line')
       .attr('stroke', '#30363d')
-      .attr('stroke-width', 1.5)
-      .attr('stroke-dasharray', '4,4');
+      .attr('stroke-width', 1)
+      .attr('stroke-opacity', 0.4);
 
     const linkMerged = linkEnter.merge(link);
 
@@ -287,17 +270,12 @@ export function AgentTopology({ maximized, onToggleMaximize }: Props) {
     // Circle for entering nodes
     nodeEnter.append('circle')
       .attr('class', 'main-circle')
-      .attr('r', (d) => (d.isApi ? 28 : 16))
-      .attr('fill', (d) => {
-        if (d.isApi) return '#161b22';
-        return AGENT_COLORS[d.type] || AGENT_COLORS.unknown;
-      });
+      .attr('r', 18);
 
-    // Status ring for agent nodes
-    nodeEnter.filter((d) => !d.isApi)
-      .append('circle')
+    // Status ring
+    nodeEnter.append('circle')
       .attr('class', 'status-ring')
-      .attr('r', 20)
+      .attr('r', 22)
       .attr('fill', 'none')
       .attr('stroke-width', 1)
       .attr('opacity', 0.3);
@@ -308,16 +286,15 @@ export function AgentTopology({ maximized, onToggleMaximize }: Props) {
       .attr('text-anchor', 'middle')
       .attr('dy', 4)
       .attr('fill', '#c9d1d9')
-      .attr('font-size', (d) => (d.isApi ? '11px' : '9px'))
+      .attr('font-size', '9px')
       .attr('font-weight', '600')
       .attr('pointer-events', 'none');
 
-    // ID label below agent nodes
-    nodeEnter.filter((d) => !d.isApi)
-      .append('text')
+    // ID label below nodes
+    nodeEnter.append('text')
       .attr('class', 'node-id')
       .attr('text-anchor', 'middle')
-      .attr('dy', 30)
+      .attr('dy', 34)
       .attr('fill', '#8b949e')
       .attr('font-size', '8px')
       .attr('pointer-events', 'none');
@@ -327,15 +304,15 @@ export function AgentTopology({ maximized, onToggleMaximize }: Props) {
 
     // Update dynamic attributes on ALL nodes (enter + existing)
     nodeMerged.select('.main-circle')
+      .attr('fill', (d) => AGENT_COLORS[d.type] || AGENT_COLORS.unknown)
       .attr('stroke', (d) => {
-        if (d.isApi) return '#58a6ff';
         const status = d.status?.status || 'running';
         return STATUS_COLORS[status] || STATUS_COLORS.running;
       })
-      .attr('stroke-width', (d) => (d.isApi ? 2.5 : 2))
+      .attr('stroke-width', 2)
       .style('filter', (d) => {
         const status = d.status?.status;
-        if (d.isApi || status === 'running') return 'url(#glow)';
+        if (status === 'running') return 'url(#glow)';
         return 'none';
       });
 
@@ -347,12 +324,15 @@ export function AgentTopology({ maximized, onToggleMaximize }: Props) {
 
     nodeMerged.select('.node-label')
       .text((d) => {
-        if (d.isApi) return 'API';
-        return d.type.charAt(0).toUpperCase() + d.type.slice(1, 4);
+        const label = d.type.charAt(0).toUpperCase() + d.type.slice(1);
+        return label.length > 6 ? label.slice(0, 6) : label;
       });
 
     nodeMerged.select('.node-id')
-      .text((d) => d.id.split('-').slice(-1)[0]);
+      .text((d) => {
+        const parts = d.id.split('-');
+        return parts[parts.length - 1];
+      });
 
     // Drag behavior
     const drag = d3.drag<SVGGElement, NodeDatum>()
@@ -367,10 +347,8 @@ export function AgentTopology({ maximized, onToggleMaximize }: Props) {
       })
       .on('end', (event, d) => {
         if (!event.active) simulation.alphaTarget(0);
-        if (!d.isApi) {
-          d.fx = null;
-          d.fy = null;
-        }
+        d.fx = null;
+        d.fy = null;
       });
 
     nodeMerged.call(drag);
@@ -378,7 +356,7 @@ export function AgentTopology({ maximized, onToggleMaximize }: Props) {
     // Tooltip handlers
     nodeMerged
       .on('mouseover', (_event, d) => {
-        if (d.isApi || !d.status) return;
+        if (!d.status) return;
         const s = d.status;
         tooltip
           .style('display', 'block')
@@ -386,10 +364,8 @@ export function AgentTopology({ maximized, onToggleMaximize }: Props) {
             `<div class="label">${s.agent_id}</div>` +
             `<div class="value">Type: ${s.agent_type}</div>` +
             `<div class="value">Status: ${s.status}</div>` +
-            `<div class="value">Processed: ${s.items_processed}</div>` +
-            `<div class="value">Errors: ${s.error_count}</div>` +
-            `<div class="value">Avg time: ${s.processing_time_avg_ms.toFixed(1)}ms</div>` +
-            `<div class="value">Memory: ${s.memory_mb.toFixed(1)} MB</div>`
+            (s.tags?.length ? `<div class="value">Capabilities: ${s.tags.join(', ')}</div>` : '') +
+            `<div class="value">Uptime: ${Math.floor(s.uptime_seconds)}s</div>`
           );
       })
       .on('mousemove', (event) => {
@@ -429,7 +405,7 @@ export function AgentTopology({ maximized, onToggleMaximize }: Props) {
         <h2>Agent Topology</h2>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
           <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
-            {agents.length} agent{agents.length !== 1 ? 's' : ''}
+            {agents.length} node{agents.length !== 1 ? 's' : ''}
           </span>
           {onToggleMaximize && (
             <button className="panel-btn" onClick={onToggleMaximize} title={maximized ? 'Restore' : 'Maximize'}>

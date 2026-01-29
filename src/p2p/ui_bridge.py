@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 STATUS_MAP = {"alive": "running", "suspect": "stale", "dead": "dead"}
 
 # Priority order for picking "agent_type" from capabilities
-CAPABILITY_PRIORITY = ["cli", "inference", "validation", "llm", "store"]
+CAPABILITY_PRIORITY = ["cli", "inference", "validation", "store", "llm"]
 
 
 def _peer_to_agent(peer_state) -> dict[str, Any]:

@@ -240,7 +240,7 @@ class TransportClient:
             task.cancel()
 
     async def close_all(self) -> None:
-        for ws in self._outbound_ws.values():
+        for ws in list(self._outbound_ws.values()):
             try:
                 await ws.close()
             except Exception:

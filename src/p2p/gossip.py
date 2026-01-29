@@ -85,6 +85,8 @@ class GossipProtocol:
                 continue
             # Use local receive time for health checks (not sender's clock)
             ps.last_seen = now
+            # Re-apply URL overrides so gossip doesn't reset remapped URLs
+            self.node.apply_url_overrides(ps)
             updated = self.node.routing.update_peer(ps)
             if updated:
                 logger.debug(

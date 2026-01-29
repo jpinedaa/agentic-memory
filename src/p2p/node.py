@@ -7,6 +7,7 @@ import logging
 import time
 from collections import OrderedDict
 from typing import Any, Callable, Awaitable
+from urllib.parse import urlparse
 
 from src.p2p.types import Capability, PeerInfo, PeerState, generate_node_id
 from src.p2p.messages import Envelope
@@ -75,6 +76,11 @@ class PeerNode:
 
         # Event listeners (agents, UI, etc.)
         self._event_listeners: list[Callable[[str, dict[str, Any]], Awaitable[None]]] = []
+
+        # Bootstrap URL overrides: when a peer advertises a hostname
+        # unreachable from this node (e.g. Docker-internal), we remap
+        # to the bootstrap URL we actually connected to.
+        self._url_overrides: dict[str, tuple[str, str]] = {}  # node_id -> (http_url, ws_url)
 
     def register_service(self, name: str, service: Any) -> None:
         """Register a local service (e.g. 'memory', 'store', 'llm')."""
@@ -164,11 +170,46 @@ class PeerNode:
             f"{peer_url}/p2p/message", envelope.to_dict()
         )
         if response and response.get("msg_type") == "welcome":
-            return [
+            sender_id = response.get("sender_id")
+            parsed = urlparse(peer_url)
+            bootstrap_http = f"{parsed.scheme}://{parsed.hostname}:{parsed.port}"
+            bootstrap_ws = f"ws://{parsed.hostname}:{parsed.port}/p2p/ws"
+
+            peers = [
                 PeerState.from_dict(ps)
                 for ps in response["payload"].get("peers", [])
             ]
+
+            # Remap the bootstrap peer's URLs to the one we actually
+            # connected to. This handles cross-network scenarios
+            # (e.g. local CLI connecting to Docker containers).
+            for ps in peers:
+                if ps.info.node_id == sender_id:
+                    if ps.info.http_url != bootstrap_http:
+                        logger.info(
+                            f"Remapping peer {sender_id} URL "
+                            f"{ps.info.http_url} -> {bootstrap_http}"
+                        )
+                        self._url_overrides[sender_id] = (bootstrap_http, bootstrap_ws)
+                        self.apply_url_overrides(ps)
+                    break
+
+            return peers
         return []
+
+    def apply_url_overrides(self, ps: PeerState) -> None:
+        """Apply bootstrap URL overrides to a peer state.
+
+        When we bootstrapped via a URL different from the peer's advertised
+        URL (e.g. localhost vs Docker hostname), we keep using the URL that
+        actually works. PeerInfo is frozen, so we replace it entirely.
+        """
+        from dataclasses import replace
+
+        override = self._url_overrides.get(ps.info.node_id)
+        if override:
+            http_url, ws_url = override
+            ps.info = replace(ps.info, http_url=http_url, ws_url=ws_url)
 
     # ── Neighbor Management ─────────────────────────────────────────
 

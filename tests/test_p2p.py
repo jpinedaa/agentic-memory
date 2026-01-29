@@ -622,3 +622,109 @@ class TestWorkerAgent:
         await asyncio.wait_for(task, timeout=5.0)
         # process() called at least once on startup + once from event
         assert agent.process_count >= 1
+
+
+# ── URL Override Tests ───────────────────────────────────────────
+
+
+class TestUrlOverrides:
+    """Test bootstrap URL remapping for cross-network scenarios."""
+
+    def test_apply_url_overrides(self):
+        from src.p2p.node import PeerNode
+
+        node = PeerNode(
+            capabilities={Capability.CLI},
+            listen_host="127.0.0.1",
+            listen_port=9003,
+        )
+        # Simulate a bootstrap override (Docker hostname -> localhost)
+        node._url_overrides["store-node-id"] = (
+            "http://localhost:9000",
+            "ws://localhost:9000/p2p/ws",
+        )
+
+        peer = PeerState(
+            info=PeerInfo(
+                node_id="store-node-id",
+                capabilities=frozenset({Capability.STORE, Capability.LLM}),
+                http_url="http://store-node:9000",
+                ws_url="ws://store-node:9000/p2p/ws",
+                started_at=time.time(),
+            ),
+            status="alive",
+            last_seen=time.time(),
+            heartbeat_seq=5,
+        )
+        node.apply_url_overrides(peer)
+        assert peer.info.http_url == "http://localhost:9000"
+        assert peer.info.ws_url == "ws://localhost:9000/p2p/ws"
+
+    def test_no_override_when_not_needed(self):
+        from src.p2p.node import PeerNode
+
+        node = PeerNode(
+            capabilities={Capability.CLI},
+            listen_host="127.0.0.1",
+            listen_port=9003,
+        )
+        # No overrides set
+        peer = PeerState(
+            info=PeerInfo(
+                node_id="some-node",
+                capabilities=frozenset({Capability.INFERENCE}),
+                http_url="http://inference-node:9000",
+                ws_url="ws://inference-node:9000/p2p/ws",
+                started_at=time.time(),
+            ),
+            status="alive",
+            last_seen=time.time(),
+            heartbeat_seq=1,
+        )
+        node.apply_url_overrides(peer)
+        # Unchanged — no override for this peer
+        assert peer.info.http_url == "http://inference-node:9000"
+
+    def test_gossip_preserves_overrides(self):
+        """Gossip should re-apply URL overrides so they don't get reset."""
+        from src.p2p.node import PeerNode
+        from src.p2p.gossip import GossipProtocol
+
+        node = PeerNode(
+            capabilities={Capability.CLI},
+            listen_host="127.0.0.1",
+            listen_port=9003,
+        )
+        node._url_overrides["store-abc"] = (
+            "http://localhost:9000",
+            "ws://localhost:9000/p2p/ws",
+        )
+
+        # Simulate gossip arriving with Docker-internal URLs
+        gossip_envelope = Envelope(
+            msg_type="gossip",
+            sender_id="store-abc",
+            payload={
+                "peer_states": [
+                    PeerState(
+                        info=PeerInfo(
+                            node_id="store-abc",
+                            capabilities=frozenset({Capability.STORE, Capability.LLM}),
+                            http_url="http://store-node:9000",
+                            ws_url="ws://store-node:9000/p2p/ws",
+                            started_at=time.time(),
+                        ),
+                        status="alive",
+                        last_seen=time.time(),
+                        heartbeat_seq=10,
+                    ).to_dict(),
+                ],
+            },
+        )
+        node.gossip.handle_gossip(gossip_envelope)
+
+        # The routing table should have the overridden URL
+        peer = node.routing._peers.get("store-abc")
+        assert peer is not None
+        assert peer.info.http_url == "http://localhost:9000"
+        assert peer.info.ws_url == "ws://localhost:9000/p2p/ws"
