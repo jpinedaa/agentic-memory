@@ -52,20 +52,19 @@ All nodes have label `Node` with a `type` property distinguishing them.
 | Type | Properties | Description |
 |------|------------|-------------|
 | `Observation` | `id`, `raw_content`, `source`, `timestamp`, `type` | Raw natural language input |
-| `ExtractedTriple` | `id`, `subject_text`, `predicate_text`, `object_text`, `timestamp`, `type` | Structured fact from observation |
 | `Entity` | `id`, `name`, `entity_type`, `type` | Named thing (person, place, concept) |
-| `Claim` | `id`, `subject_text`, `predicate_text`, `object_text`, `confidence`, `status`, `timestamp`, `type` | Inferred or stated fact |
+| `Claim` | `id`, `subject_text`, `predicate_text`, `object_text`, `confidence`, `source`, `timestamp`, `type` | Structured assertion (extracted from observation or inferred by agent) |
+| `Resolution` | Same as Claim | A Claim that supersedes contradicting claims |
 
 ### Relationship Types
 
 | Relationship | From | To | Meaning |
 |--------------|------|------|---------|
-| `HAS_EXTRACTION` | Observation | ExtractedTriple | Observation contains this triple |
-| `SUBJECT` | Observation | Entity | Observation mentions this entity |
-| `BASED_ON` | Claim | Observation/Claim | Claim's evidential basis |
-| `ABOUT` | Claim | Entity | Claim is about this entity |
+| `SUBJECT` | Observation/Claim | Entity | Links to the entity being discussed |
+| `BASIS` | Claim | Observation/Claim | Claim's evidential basis |
 | `CONTRADICTS` | Claim | Claim | Claims are in conflict |
-| `SUPERSEDES` | Claim | Claim | Newer claim replaces older |
+| `SUPERSEDES` | Claim/Resolution | Claim | Newer claim replaces older |
+| *Dynamic predicates* | Entity | Entity | Knowledge triples (e.g. `IS_NAMED`, `PREFERS`, `WORKS_AT`) |
 
 ---
 
@@ -98,12 +97,17 @@ RETURN obs.raw_content, obs.timestamp
 ORDER BY obs.timestamp DESC
 LIMIT 10
 
--- Observations with their extractions
-MATCH (obs:Node {type: 'Observation'})-[:HAS_EXTRACTION]->(triple)
+-- Claims extracted from observations (with provenance)
+MATCH (claim:Node {type: 'Claim'})-[:BASIS]->(obs:Node {type: 'Observation'})
 RETURN obs.raw_content,
-       triple.subject_text,
-       triple.predicate_text,
-       triple.object_text
+       claim.subject_text,
+       claim.predicate_text,
+       claim.object_text,
+       claim.confidence
+
+-- Entity-to-entity knowledge triples
+MATCH (a:Node {type: 'Entity'})-[r]->(b:Node {type: 'Entity'})
+RETURN a.name, type(r), b.name
 ```
 
 ### Entities

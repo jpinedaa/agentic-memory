@@ -238,11 +238,13 @@ def create_ui_bridge(node: PeerNode, store: TripleStore) -> APIRouter:
             entity_count = await store.raw_query(
                 "MATCH (n:Node {type: 'Entity'}) RETURN count(n) AS c"
             )
-            triple_count = await store.raw_query(
-                "MATCH (n:Node {type: 'ExtractedTriple'}) RETURN count(n) AS c"
-            )
             rel_count = await store.raw_query(
                 "MATCH ()-[r]->() RETURN count(r) AS c"
+            )
+            # Count entity-to-entity edges (knowledge triples, excluding system edges)
+            triple_count = await store.raw_query(
+                "MATCH (a:Node {type: 'Entity'})-[r]->(b:Node {type: 'Entity'}) "
+                "RETURN count(r) AS c"
             )
 
             return {

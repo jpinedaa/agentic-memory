@@ -169,9 +169,9 @@ D3 force-directed knowledge graph visualization. Always renders the SVG element 
 - Entity: Blue (`#58a6ff`)
 - Observation: Gray (`#8b949e`)
 - Claim: Green (`#3fb950`)
-- ExtractedTriple: Yellow (`#d29922`)
+- Resolution: Purple (`#a371f7`)
 
-Edges show relationship types as labels. Interactive legend toggles node type visibility.
+Entity-to-entity edges show predicate labels (e.g. `IS_NAMED`, `PREFERS`). System edges (`SUBJECT`, `BASIS`, `SUPERSEDES`, `CONTRADICTS`) are also rendered. Interactive legend toggles node type visibility.
 
 ---
 

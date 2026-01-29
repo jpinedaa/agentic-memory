@@ -4,22 +4,28 @@ This document tracks the Neo4j graph patterns used in the Agentic Memory System.
 
 ---
 
-## 1. ExtractedTriple Pattern
+## 1. Unified Claim Pattern
 
-**Purpose**: Store structured semantic content extracted from natural language while preserving the link to the source observation.
+**Purpose**: All structured assertions — whether extracted from observations or inferred by agents — are stored as Claim nodes. Entity-to-entity relationships are materialized as first-class Neo4j edges.
 
 **Structure**:
 
 ```
-(Observation) ──HAS_EXTRACTION──▶ (ExtractedTriple)
-     │                              subject_text: string
-     │                              predicate_text: string
-     │                              object_text: string
-     │                              timestamp: ISO8601
-     │                              type: "ExtractedTriple"
+(Observation)
      │
      ├──SUBJECT──▶ (Entity: name=subject)
-     └──SUBJECT──▶ (Entity: name=object)   [if object is an entity]
+     │                    │
+     │                    └──PREDICATE──▶ (Entity: name=object)
+     │
+     ◄──BASIS── (Claim)
+                  subject_text: string
+                  predicate_text: string
+                  object_text: string
+                  confidence: float (1.0 for extracted, 0-1 for inferred)
+                  source: string
+                  type: "Claim"
+                    │
+                    └──SUBJECT──▶ (Entity: name=subject)
 ```
 
 **Example**:
@@ -27,42 +33,43 @@ This document tracks the Neo4j graph patterns used in the Agentic Memory System.
 Input: `"my girlfriend name is ami"`
 
 ```
-(Observation)                          (ExtractedTriple)
+(Observation)                          (Claim)
   id: 5e4d...                            subject_text: "my girlfriend"
-  raw_content: "my girlfriend..."  ───▶  predicate_text: "is named"
-  source: "cli_user"                     object_text: "ami"
-  type: "Observation"                    type: "ExtractedTriple"
-      │
-      ├──SUBJECT──▶ (Entity: name="my girlfriend")
-      └──SUBJECT──▶ (Entity: name="ami")
+  raw_content: "my girlfriend..."        predicate_text: "is named"
+  source: "cli_user"            ◄─BASIS─ object_text: "ami"
+  type: "Observation"                    confidence: 1.0
+      │                                  source: "cli_user"
+      │                                     │
+      ├──SUBJECT──▶ (Entity: "my girlfriend") ──IS_NAMED──▶ (Entity: "ami")
+      │                ◄──SUBJECT──  (Claim above)
 ```
 
-**Why this pattern**:
+**Key design decisions**:
 
-- **Provenance**: Every structured fact links back to its source observation
-- **Query flexibility**: Can query by subject/predicate/object text
-- **Entity linking**: Entities are separate nodes, allowing multiple observations to reference the same entity
-- **Raw preservation**: Original text is never lost — stored in `raw_content`
+- **No ExtractedTriple**: Observations produce Claims with `confidence: 1.0`. Agent inferences produce Claims with `confidence: 0-1`. Same node type, different provenance via `BASIS` edges.
+- **Entity-to-entity edges**: The predicate is materialized as a Neo4j relationship between entity nodes (e.g. `IS_NAMED`, `PREFERS`). Predicates are normalized: uppercase, spaces → underscores.
+- **Provenance**: `Claim --BASIS--> Observation` traces every fact back to its source.
+- **Raw preservation**: Original text is never lost — stored in `raw_content` on the Observation node.
 
 **Code references**:
 
-- **Creation**: `src/interfaces.py` → `MemoryService.observe()` (lines 51-90)
+- **Creation**: `src/interfaces.py` → `MemoryService.observe()` (creates Claims + entity edges)
 - **LLM extraction**: `src/llm.py` → `LLMTranslator.extract_observation()`
 - **Storage**: `src/store.py` → `TripleStore.create_node()`, `create_relationship()`
 
 **Cypher queries**:
 
 ```cypher
--- Find all extracted triples
-MATCH (obs:Node {type: 'Observation'})-[:HAS_EXTRACTION]->(triple)
-RETURN obs.raw_content, triple.subject_text, triple.predicate_text, triple.object_text
+-- Find all claims extracted from observations
+MATCH (claim:Node {type: 'Claim'})-[:BASIS]->(obs:Node {type: 'Observation'})
+RETURN obs.raw_content, claim.subject_text, claim.predicate_text, claim.object_text
 
--- Find triples about a specific subject
-MATCH (triple:Node {type: 'ExtractedTriple', subject_text: 'user'})
-RETURN triple
+-- Find entity-to-entity relationships (the actual knowledge graph)
+MATCH (a:Node {type: 'Entity'})-[r]->(b:Node {type: 'Entity'})
+RETURN a.name, type(r), b.name
 
--- Trace a triple back to its source
-MATCH (obs)-[:HAS_EXTRACTION]->(triple:Node {id: $triple_id})
+-- Trace a claim back to its source observation
+MATCH (claim:Node {id: $claim_id})-[:BASIS]->(obs:Node {type: 'Observation'})
 RETURN obs.raw_content, obs.source, obs.timestamp
 ```
 
@@ -101,14 +108,14 @@ The knowledge graph is rendered in the React UI's GraphView panel using D3.js. N
 
 | Node Type | Color | D3 Radius |
 |-----------|-------|-----------|
-| Entity | Blue (`#58a6ff`) | 8 |
-| Observation | Gray (`#8b949e`) | 6 |
-| Claim | Green (`#3fb950`) | 7 |
-| ExtractedTriple | Yellow (`#d29922`) | 5 |
+| Entity | Blue (`#58a6ff`) | 12 |
+| Observation | Gray (`#8b949e`) | 8 |
+| Claim | Green (`#3fb950`) | 10 |
+| Resolution | Purple (`#a371f7`) | 10 |
 
-Edges are rendered with relationship type labels. The SVG element is always mounted (not conditionally rendered) to prevent D3 initialization issues.
+Entity-to-entity edges show the predicate as labels (e.g. `IS_NAMED`, `PREFERS`). System edges (`SUBJECT`, `BASIS`, `SUPERSEDES`, `CONTRADICTS`) are also visible.
 
-Data is fetched via `GET /v1/graph/nodes?limit=200` which queries Neo4j through the UI bridge on the store node.
+The SVG element is always mounted (not conditionally rendered) to prevent D3 initialization issues. Data is fetched via `GET /v1/graph/nodes?limit=200` which queries Neo4j through the UI bridge on the store node.
 
 ---
 

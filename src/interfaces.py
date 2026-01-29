@@ -63,19 +63,29 @@ class MemoryService:
             )
             await self.store.create_relationship(obs_id, "SUBJECT", entity_id)
 
-        # Store extracted relationships as properties on the observation
-        for i, ext in enumerate(extraction.extractions):
-            await self.store.create_node(obs_id, {}) if False else None  # node already exists
-            # Store extractions as separate triple nodes linked to the observation
-            triple_id = _new_id()
-            await self.store.create_node(triple_id, {
-                "type": "ExtractedTriple",
+        # Create Claim nodes for each extracted triple and link entities
+        for ext in extraction.extractions:
+            claim_id = _new_id()
+            await self.store.create_node(claim_id, {
+                "type": "Claim",
+                "source": source,
+                "timestamp": _now(),
                 "subject_text": ext.subject,
                 "predicate_text": ext.predicate,
                 "object_text": ext.object,
-                "timestamp": _now(),
+                "confidence": 1.0,
             })
-            await self.store.create_relationship(obs_id, "HAS_EXTRACTION", triple_id)
+            # Claim is based on the observation
+            await self.store.create_relationship(claim_id, "BASIS", obs_id)
+
+            # Link claim to subject entity
+            subj_id = await self.store.get_or_create_entity(ext.subject, _new_id())
+            await self.store.create_relationship(claim_id, "SUBJECT", subj_id)
+
+            # Entity-to-entity edge (the actual triple as a graph relationship)
+            obj_id = await self.store.get_or_create_entity(ext.object, _new_id())
+            rel_type = _normalize_predicate(ext.predicate)
+            await self.store.create_relationship(subj_id, rel_type, obj_id)
 
         return obs_id
 
@@ -257,6 +267,11 @@ class MemoryService:
 
     async def clear(self) -> None:
         await self.store.clear_all()
+
+
+def _normalize_predicate(predicate: str) -> str:
+    """Convert predicate text to a valid Neo4j relationship type."""
+    return predicate.strip().upper().replace(" ", "_").replace("-", "_")
 
 
 def _text_overlap(a: str, b: str) -> bool:

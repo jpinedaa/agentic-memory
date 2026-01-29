@@ -7,14 +7,14 @@ const NODE_COLORS: Record<string, string> = {
   Entity: '#58a6ff',
   Observation: '#8b949e',
   Claim: '#3fb950',
-  ExtractedTriple: '#d29922',
+  Resolution: '#a371f7',
 };
 
 const NODE_RADIUS: Record<string, number> = {
   Entity: 12,
   Observation: 8,
   Claim: 10,
-  ExtractedTriple: 8,
+  Resolution: 10,
 };
 
 interface Props {

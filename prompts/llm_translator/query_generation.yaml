@@ -12,20 +12,20 @@ user: |
 
   Nodes have label `:Node` with these properties:
   - `id`: UUID string
-  - `type`: "Observation", "Claim", "Resolution", "Entity", or "ExtractedTriple"
+  - `type`: "Observation", "Claim", "Resolution", or "Entity"
   - `source`: who created this node
   - `timestamp`: ISO8601 datetime string
   - `raw_content`: original text (on Observations)
   - `name`: entity name (on Entity nodes)
   - `confidence`: float 0-1 (on Claims)
-  - `subject_text`, `predicate_text`, `object_text`: relationship components
+  - `subject_text`, `predicate_text`, `object_text`: relationship components (on Claims)
 
   Relationships:
   - `SUBJECT`: from Claim/Observation to Entity
-  - `BASIS`: from Claim to what it's based on
+  - `BASIS`: from Claim to what it's based on (Observation or another Claim)
   - `SUPERSEDES`: from newer Claim to older one it replaces
   - `CONTRADICTS`: between conflicting Claims
-  - `HAS_EXTRACTION`: from Observation to ExtractedTriple
+  - Dynamic predicate edges between Entity nodes (e.g. `IS_NAMED`, `PREFERS`, `WORKS_AT`) — these are the actual knowledge triples
 
   ## Output Format
 
