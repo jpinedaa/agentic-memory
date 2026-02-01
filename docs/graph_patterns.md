@@ -2,11 +2,13 @@
 
 This document tracks the Neo4j graph patterns used in the Agentic Memory System.
 
+For the full knowledge representation model (node types, relationship types, design philosophy), see [Knowledge Representation](knowledge_representation.md).
+
 ---
 
-## 1. Unified Claim Pattern
+## 1. Observation Pattern
 
-**Purpose**: All structured assertions — whether extracted from observations or inferred by agents — are stored as Claim nodes. Entity-to-entity relationships are materialized as first-class Neo4j edges.
+**Purpose**: `observe()` records raw input and builds entity graph structure. No Claim nodes are created — claims are exclusively the inference agent's job.
 
 **Structure**:
 
@@ -16,16 +18,6 @@ This document tracks the Neo4j graph patterns used in the Agentic Memory System.
      ├──SUBJECT──▶ (Entity: name=subject)
      │                    │
      │                    └──PREDICATE──▶ (Entity: name=object)
-     │
-     ◄──BASIS── (Claim)
-                  subject_text: string
-                  predicate_text: string
-                  object_text: string
-                  confidence: float (1.0 for extracted, 0-1 for inferred)
-                  source: string
-                  type: "Claim"
-                    │
-                    └──SUBJECT──▶ (Entity: name=subject)
 ```
 
 **Example**:
@@ -33,49 +25,115 @@ This document tracks the Neo4j graph patterns used in the Agentic Memory System.
 Input: `"my girlfriend name is ami"`
 
 ```
-(Observation)                          (Claim)
-  id: 5e4d...                            subject_text: "my girlfriend"
-  raw_content: "my girlfriend..."        predicate_text: "is named"
-  source: "cli_user"            ◄─BASIS─ object_text: "ami"
-  type: "Observation"                    confidence: 1.0
-      │                                  source: "cli_user"
-      │                                     │
+(Observation)
+  id: 5e4d...
+  raw_content: "my girlfriend name is ami"
+  source: "cli_user"
+  type: "Observation"
+      │
       ├──SUBJECT──▶ (Entity: "my girlfriend") ──IS_NAMED──▶ (Entity: "ami")
-      │                ◄──SUBJECT──  (Claim above)
+      ├──SUBJECT──▶ (Entity: "ami")
 ```
 
-**Key design decisions**:
+**What happens**:
 
-- **No ExtractedTriple**: Observations produce Claims with `confidence: 1.0`. Agent inferences produce Claims with `confidence: 0-1`. Same node type, different provenance via `BASIS` edges.
-- **Entity-to-entity edges**: The predicate is materialized as a Neo4j relationship between entity nodes (e.g. `IS_NAMED`, `PREFERS`). Predicates are normalized: uppercase, spaces → underscores.
-- **Provenance**: `Claim --BASIS--> Observation` traces every fact back to its source.
-- **Raw preservation**: Original text is never lost — stored in `raw_content` on the Observation node.
+1. Observation node stores the raw text
+2. Entity nodes are created/reused for each mentioned entity
+3. Observation links to entities via SUBJECT
+4. Entity-to-entity edges are created from extracted triples (the knowledge graph)
+
+**What does NOT happen**:
+
+- No Claim nodes are created
+- No BASIS links from this path
+- No confidence scores at this stage
 
 **Code references**:
 
-- **Creation**: `src/interfaces.py` → `MemoryService.observe()` (creates Claims + entity edges)
+- **Creation**: `src/interfaces.py` → `MemoryService.observe()`
 - **LLM extraction**: `src/llm.py` → `LLMTranslator.extract_observation()`
 - **Storage**: `src/store.py` → `TripleStore.create_node()`, `create_relationship()`
 
 **Cypher queries**:
 
 ```cypher
--- Find all claims extracted from observations
-MATCH (claim:Node {type: 'Claim'})-[:BASIS]->(obs:Node {type: 'Observation'})
-RETURN obs.raw_content, claim.subject_text, claim.predicate_text, claim.object_text
-
--- Find entity-to-entity relationships (the actual knowledge graph)
+-- Find entity-to-entity relationships (the knowledge graph)
 MATCH (a:Node {type: 'Entity'})-[r]->(b:Node {type: 'Entity'})
 RETURN a.name, type(r), b.name
 
--- Trace a claim back to its source observation
-MATCH (claim:Node {id: $claim_id})-[:BASIS]->(obs:Node {type: 'Observation'})
-RETURN obs.raw_content, obs.source, obs.timestamp
+-- Find which observations mention an entity
+MATCH (obs:Node {type: 'Observation'})-[:SUBJECT]->(e:Node {type: 'Entity'})
+RETURN obs.raw_content, e.name, obs.timestamp
+ORDER BY obs.timestamp DESC
 ```
 
 ---
 
-## 2. Agent Status Pattern (P2P Gossip)
+## 2. Claim Pattern
+
+**Purpose**: `claim()` records agent assertions with confidence scores and evidential links. Only agents create claims — never `observe()`.
+
+**Structure**:
+
+```
+(Claim)
+  subject_text: string
+  predicate_text: string
+  object_text: string
+  confidence: float (0.0-1.0)
+  source: string (agent name)
+     │
+     ├──SUBJECT──▶ (Entity: name=subject)
+     ├──BASIS──▶ (Observation or Claim)
+     ├──CONTRADICTS──▶ (Claim)          [if applicable]
+     └──SUPERSEDES──▶ (Claim)           [if Resolution]
+```
+
+**Example**:
+
+After the inference agent processes the observation `"my girlfriend name is ami"`:
+
+```
+(Claim)
+  subject_text: "user"
+  predicate_text: "has girlfriend named"
+  object_text: "ami"
+  confidence: 0.9
+  source: "inference_agent"
+     │
+     ├──SUBJECT──▶ (Entity: "user")
+     └──BASIS──▶ (Observation: "my girlfriend name is ami")
+```
+
+**Code references**:
+
+- **Creation**: `src/interfaces.py` → `MemoryService.claim()`
+- **LLM parsing**: `src/llm.py` → `LLMTranslator.parse_claim()`
+- **Basis matching**: `src/interfaces.py` → `MemoryService._find_matching_node()`
+
+**Cypher queries**:
+
+```cypher
+-- All claims with their basis
+MATCH (c:Node {type: 'Claim'})-[:BASIS]->(basis)
+RETURN c.subject_text, c.predicate_text, c.object_text,
+       c.confidence, basis.type, basis.raw_content
+
+-- Trace a claim back to its source observation
+MATCH (claim:Node {id: $claim_id})-[:BASIS]->(obs:Node {type: 'Observation'})
+RETURN obs.raw_content, obs.source, obs.timestamp
+
+-- Claims about an entity (excluding superseded)
+MATCH (c:Node)-[:SUBJECT]->(e:Node {type: 'Entity'})
+WHERE c.type IN ['Claim', 'Resolution']
+AND NOT EXISTS { MATCH (newer:Node)-[:SUPERSEDES]->(c) }
+RETURN c.subject_text, c.predicate_text, c.object_text, c.confidence
+ORDER BY c.confidence DESC, c.timestamp DESC
+```
+
+---
+
+## 3. Agent Status Pattern (P2P Gossip)
 
 **Purpose**: Track node lifecycle and health across the P2P network. Stored in-memory in each node's `RoutingTable` — no external database needed.
 
@@ -121,12 +179,11 @@ The SVG element is always mounted (not conditionally rendered) to prevent D3 ini
 
 ## Suggested Future Patterns
 
-- **Claim-Basis Pattern**: How claims link to their evidential basis (observations or other claims)
-- **Contradiction Pattern**: How contradicting claims are linked and resolved
-- **Entity Merge Pattern**: Handling when two entities are discovered to be the same thing
-- **Temporal Supersession Pattern**: How newer claims supersede older ones
+- **Entity Merge Pattern**: Handling when two entities are discovered to be the same thing (e.g. `SAME_AS` links)
+- **Temporal Supersession Pattern**: How newer claims supersede older ones over time
+- **Claim-to-Entity Edge Materialization**: Creating entity-to-entity edges from claims (currently only observations do this)
 
 ---
 
-*Document version: 0.3*
+*Document version: 0.4*
 *Last updated: 2026-01-29*

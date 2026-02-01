@@ -80,6 +80,8 @@ A shared memory substrate that multiple agents interact with as a service. The s
 
 ## 3. Data Model
 
+For the full knowledge representation model, see [Knowledge Representation](knowledge_representation.md).
+
 ### 3.1 The Triple
 
 The fundamental unit of storage:
@@ -222,13 +224,10 @@ validator_agent = AgentInterface(source="validator_agent")
 
 **Behavior**:
 1. LLM extracts structured content (entities, relationships) from text
-2. Creates Observation node with:
-   - Auto-generated UUID
-   - source = bound source identity
-   - timestamp = now()
-   - raw_content = original text
-   - Extracted subject/predicate/object triples
-3. Writes triples to store
+2. Creates Observation node with raw_content, source, timestamp, topics
+3. Creates Entity nodes for each mentioned entity; links via SUBJECT
+4. Creates entity-to-entity edges from extracted triples (knowledge graph structure)
+5. No Claim nodes — claims are exclusively the inference agent's job
 
 **Example**:
 ```python
@@ -701,9 +700,9 @@ memory-system/
 
 ---
 
-*Document version: 0.5*
+*Document version: 0.6*
 *Last updated: 2026-01-29*
-*Status: v0.3 P2P architecture with UI bridge implemented*
+*Status: v0.3 P2P architecture with UI bridge implemented. Knowledge representation documented separately.*
 
 ---
 

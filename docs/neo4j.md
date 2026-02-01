@@ -53,7 +53,7 @@ All nodes have label `Node` with a `type` property distinguishing them.
 |------|------------|-------------|
 | `Observation` | `id`, `raw_content`, `source`, `timestamp`, `type` | Raw natural language input |
 | `Entity` | `id`, `name`, `entity_type`, `type` | Named thing (person, place, concept) |
-| `Claim` | `id`, `subject_text`, `predicate_text`, `object_text`, `confidence`, `source`, `timestamp`, `type` | Structured assertion (extracted from observation or inferred by agent) |
+| `Claim` | `id`, `subject_text`, `predicate_text`, `object_text`, `confidence`, `source`, `timestamp`, `type` | Structured assertion (inferred by agents only) |
 | `Resolution` | Same as Claim | A Claim that supersedes contradicting claims |
 
 ### Relationship Types
@@ -97,7 +97,7 @@ RETURN obs.raw_content, obs.timestamp
 ORDER BY obs.timestamp DESC
 LIMIT 10
 
--- Claims extracted from observations (with provenance)
+-- Claims based on observations (created by inference agent)
 MATCH (claim:Node {type: 'Claim'})-[:BASIS]->(obs:Node {type: 'Observation'})
 RETURN obs.raw_content,
        claim.subject_text,
@@ -105,7 +105,7 @@ RETURN obs.raw_content,
        claim.object_text,
        claim.confidence
 
--- Entity-to-entity knowledge triples
+-- Entity-to-entity knowledge triples (created by observe())
 MATCH (a:Node {type: 'Entity'})-[r]->(b:Node {type: 'Entity'})
 RETURN a.name, type(r), b.name
 ```
@@ -131,20 +131,21 @@ RETURN e
 ```cypher
 -- All claims
 MATCH (c:Node {type: 'Claim'})
-RETURN c.subject_text, c.predicate_text, c.object_text, c.confidence, c.status
+RETURN c.subject_text, c.predicate_text, c.object_text, c.confidence, c.source
 
 -- Active claims only (not superseded)
 MATCH (c:Node {type: 'Claim'})
-WHERE c.status <> 'superseded'
+WHERE NOT EXISTS { MATCH (:Node)-[:SUPERSEDES]->(c) }
 RETURN c.subject_text, c.predicate_text, c.object_text, c.confidence
 
 -- Claims with their basis
-MATCH (c:Node {type: 'Claim'})-[:BASED_ON]->(basis)
+MATCH (c:Node {type: 'Claim'})-[:BASIS]->(basis)
 RETURN c.subject_text, c.predicate_text, c.object_text,
        basis.type, basis.raw_content
 
 -- Claims about a specific entity
-MATCH (c:Node {type: 'Claim'})-[:ABOUT]->(e:Node {name: 'user'})
+MATCH (c:Node {type: 'Claim'})-[:SUBJECT]->(e:Node {type: 'Entity'})
+WHERE toLower(e.name) = 'user'
 RETURN c.subject_text, c.predicate_text, c.object_text
 ```
 
@@ -156,9 +157,10 @@ MATCH (c1:Node {type: 'Claim'})-[:CONTRADICTS]->(c2:Node {type: 'Claim'})
 RETURN c1.subject_text, c1.predicate_text, c1.object_text,
        c2.subject_text, c2.predicate_text, c2.object_text
 
--- Unresolved contradictions
-MATCH (c1:Node {type: 'Claim'})-[:CONTRADICTS]->(c2:Node {type: 'Claim'})
-WHERE c1.status <> 'superseded' AND c2.status <> 'superseded'
+-- Unresolved contradictions (neither side superseded)
+MATCH (c1:Node)-[:CONTRADICTS]->(c2:Node)
+WHERE NOT EXISTS { MATCH (:Node {type: 'Resolution'})-[:SUPERSEDES]->(c1) }
+AND NOT EXISTS { MATCH (:Node {type: 'Resolution'})-[:SUPERSEDES]->(c2) }
 RETURN c1, c2
 ```
 
@@ -166,13 +168,13 @@ RETURN c1, c2
 
 ```cypher
 -- Trace a claim back to its origins
-MATCH path = (c:Node {type: 'Claim'})-[:BASED_ON*]->(origin)
-WHERE NOT (origin)-[:BASED_ON]->()
+MATCH path = (c:Node {type: 'Claim'})-[:BASIS*]->(origin)
+WHERE NOT (origin)-[:BASIS]->()
 RETURN path
 
 -- Full lineage for a specific claim
 MATCH (c:Node {type: 'Claim', id: $claim_id})
-MATCH path = (c)-[:BASED_ON*0..]->(basis)
+MATCH path = (c)-[:BASIS*0..]->(basis)
 RETURN path
 ```
 
@@ -285,10 +287,11 @@ docker compose down -v  # DELETES volumes
 
 ## See Also
 
-- [Graph Patterns](graph_patterns.md) - Detailed documentation of graph patterns
+- [Knowledge Representation](knowledge_representation.md) - How knowledge is stored and queried
+- [Graph Patterns](graph_patterns.md) - Neo4j graph patterns and visualization
 - [Design Tracking](design_tracking.md) - Full system architecture
 
 ---
 
-*Document version: 0.1*
-*Last updated: 2026-01-28*
+*Document version: 0.2*
+*Last updated: 2026-01-29*
