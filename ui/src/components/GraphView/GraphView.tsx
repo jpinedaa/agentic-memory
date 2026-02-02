@@ -4,17 +4,17 @@ import { useGraphStore } from '../../stores/graphStore';
 import type { GraphNode } from '../../types';
 
 const NODE_COLORS: Record<string, string> = {
-  Entity: '#58a6ff',
-  Observation: '#8b949e',
-  Claim: '#3fb950',
-  Resolution: '#a371f7',
+  Concept: '#58a6ff',       // Blue — named entities, values, categories
+  Statement: '#3fb950',     // Green — reified triples (predicate + confidence)
+  Observation: '#8b949e',   // Gray — raw input text
+  Source: '#a371f7',        // Purple — provenance (who asserted)
 };
 
 const NODE_RADIUS: Record<string, number> = {
-  Entity: 12,
+  Concept: 12,
+  Statement: 10,
   Observation: 8,
-  Claim: 10,
-  Resolution: 10,
+  Source: 9,
 };
 
 interface Props {
@@ -299,8 +299,8 @@ export function GraphView({ maximized, onToggleMaximize }: Props) {
       .attr('opacity', 0.85)
       .style('filter', 'url(#graph-glow)');
 
-    // Labels for entities
-    nodeEnter.filter((d) => d.type === 'Entity')
+    // Labels for Concepts (show name)
+    nodeEnter.filter((d) => d.type === 'Concept')
       .append('text')
       .attr('text-anchor', 'middle')
       .attr('dy', -16)
@@ -310,7 +310,21 @@ export function GraphView({ maximized, onToggleMaximize }: Props) {
       .attr('pointer-events', 'none')
       .text((d) => {
         const name = (d.data as Record<string, string>).name || '';
-        return name.length > 12 ? name.slice(0, 12) + '...' : name;
+        return name.length > 20 ? name.slice(0, 20) + '...' : name;
+      });
+
+    // Labels for Statements (show predicate)
+    nodeEnter.filter((d) => d.type === 'Statement')
+      .append('text')
+      .attr('text-anchor', 'middle')
+      .attr('dy', -14)
+      .attr('fill', '#3fb950')
+      .attr('font-size', '9px')
+      .attr('font-style', 'italic')
+      .attr('pointer-events', 'none')
+      .text((d) => {
+        const predicate = (d.data as Record<string, string>).predicate || '';
+        return predicate.length > 16 ? predicate.slice(0, 16) + '...' : predicate;
       });
 
     const nodeMerged = nodeEnter.merge(node);
@@ -337,11 +351,21 @@ export function GraphView({ maximized, onToggleMaximize }: Props) {
     // Tooltip
     nodeMerged
       .on('mouseover', (_event, d) => {
-        const data = d.data as Record<string, string>;
+        const data = d.data as Record<string, unknown>;
         let html = `<div class="label">${d.type}</div>`;
-        if (data.name) html += `<div class="value">Name: ${data.name}</div>`;
-        if (data.raw_content) html += `<div class="value">${data.raw_content.slice(0, 100)}</div>`;
-        if (data.subject_text) html += `<div class="value">${data.subject_text} ${data.predicate_text} ${data.object_text}</div>`;
+        if (d.type === 'Concept') {
+          if (data.name) html += `<div class="value">Name: ${data.name}</div>`;
+          if (data.kind) html += `<div class="value">Kind: ${data.kind}</div>`;
+        } else if (d.type === 'Statement') {
+          if (data.predicate != null) html += `<div class="value">Predicate: ${data.predicate}</div>`;
+          if (data.confidence != null) html += `<div class="value">Confidence: ${data.confidence}</div>`;
+          if (data.negated) html += `<div class="value" style="color:#f85149">Negated</div>`;
+        } else if (d.type === 'Observation') {
+          if (data.raw_content) html += `<div class="value">${String(data.raw_content).slice(0, 120)}</div>`;
+        } else if (d.type === 'Source') {
+          if (data.name) html += `<div class="value">Name: ${data.name}</div>`;
+          if (data.kind) html += `<div class="value">Kind: ${data.kind}</div>`;
+        }
         tooltip.style('display', 'block').html(html);
       })
       .on('mousemove', (event) => {

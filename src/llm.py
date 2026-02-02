@@ -129,9 +129,9 @@ OBSERVATION_TOOL = {
                 "items": {
                     "type": "object",
                     "properties": {
-                        "subject": {"type": "string", "description": "Subject concept name (must match a concept)"},
-                        "predicate": {"type": "string", "description": "Relationship verb (e.g. 'is', 'prefers', 'has')"},
-                        "object": {"type": "string", "description": "Object concept name (must match a concept)"},
+                        "subject": {"type": "string", "description": "Subject entity — who/what has the property or does the action (must match a concept)"},
+                        "predicate": {"type": "string", "description": "Semantic relationship (e.g. 'has name', 'prefers', 'works at', 'is a')"},
+                        "object": {"type": "string", "description": "Object value/target — the attribute value or action target (must match a concept)"},
                         "confidence": {
                             "type": "number",
                             "description": "Certainty 0.0-1.0. Direct statements = high, implied = lower.",

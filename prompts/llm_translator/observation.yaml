@@ -13,10 +13,24 @@ system: |
   - Decompose compound concepts into components. For example:
     "peer-to-peer network" → components: [{name: "network", relation: "is_a"}, {name: "peer-to-peer", relation: "has_property"}]
     "morning meetings" → components: [{name: "meetings", relation: "head_noun"}, {name: "morning", relation: "modifier"}]
-  - Predicates should be simple verbs or verb phrases (e.g. "is", "prefers", "works at")
+  - Predicates should be simple verbs or verb phrases (e.g. "has name", "prefers", "works at")
   - Each statement's subject and object must match a concept name
   - Set confidence based on directness: stated facts = 0.9-1.0, implied = 0.6-0.8
   - Use negated=true for negative statements (e.g. "does NOT like")
+
+  Pronoun and identity resolution:
+  - First-person pronouns ("I", "my", "me") refer to the speaker — create a concept named "user" (kind: entity)
+  - "my X is Y" means the user has attribute X with value Y. The subject is "user", NOT the value.
+    Example: "my name is Jorge" → subject: "user", predicate: "has name", object: "Jorge"
+    Example: "my favorite color is blue" → subject: "user", predicate: "has favorite color", object: "blue"
+  - "I am X" or "I'm X" → subject: "user", predicate: "is", object: X
+  - For third-person references ("he", "she", "they"), resolve to the most recent named entity if possible, otherwise use "they" as the concept name
+
+  Statement structure guidance:
+  - The subject should be the ENTITY that possesses the attribute or performs the action
+  - The object should be the VALUE, TARGET, or result
+  - Predicates should capture the relationship semantically (e.g. "has name", "prefers", "works at", "is a") not just the literal verb "is"
+  - Avoid creating statements where the predicate is just "is" and both subject and object are simple nouns — this usually means the real relationship was missed
 
 variables:
   observation_text:
