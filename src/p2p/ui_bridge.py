@@ -21,6 +21,17 @@ logger = logging.getLogger(__name__)
 
 STATUS_MAP = {"alive": "running", "suspect": "stale", "dead": "dead"}
 
+
+def _json_safe(value: Any) -> Any:
+    """Convert a value to a JSON-serializable type."""
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(v) for v in value]
+    if isinstance(value, dict):
+        return {k: _json_safe(v) for k, v in value.items()}
+    return str(value)
+
 # Priority order for picking "agent_type" from capabilities
 CAPABILITY_PRIORITY = ["cli", "inference", "validation", "store", "llm"]
 
@@ -182,7 +193,7 @@ def create_ui_bridge(node: PeerNode, store: TripleStore) -> APIRouter:
             )
             nodes = []
             for record in nodes_raw:
-                n = dict(record["n"])
+                n = _json_safe(dict(record["n"]))
                 labels = record.get("labels", [])
                 node_type = labels[0] if labels else "Unknown"
                 nodes.append({
