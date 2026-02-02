@@ -25,6 +25,7 @@ services:
       NEO4J_PASSWORD: memory-system
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
       LLM_MODEL: ${LLM_MODEL:-claude-sonnet-4-20250514}
+      LOG_CONFIG: ${LOG_CONFIG:-logging.json}
       ADVERTISE_HOST: store-node
     depends_on:
       neo4j:
@@ -41,6 +42,7 @@ services:
     command: python run_node.py --capabilities inference --port 9000 --host 0.0.0.0 --bootstrap http://store-node:9000
     environment:
       POLL_INTERVAL: "30"
+      LOG_CONFIG: ${LOG_CONFIG:-logging.json}
       ADVERTISE_HOST: inference-node
     depends_on:
       store-node:
@@ -51,6 +53,7 @@ services:
     command: python run_node.py --capabilities validation --port 9000 --host 0.0.0.0 --bootstrap http://store-node:9000
     environment:
       POLL_INTERVAL: "30"
+      LOG_CONFIG: ${LOG_CONFIG:-logging.json}
       ADVERTISE_HOST: validator-node
     depends_on:
       store-node:
@@ -60,6 +63,7 @@ services:
     build: .
     command: python run_node.py --capabilities cli --port 9000 --host 0.0.0.0 --bootstrap http://store-node:9000
     environment:
+      LOG_CONFIG: ${LOG_CONFIG:-logging.json}
       ADVERTISE_HOST: cli-node
     stdin_open: true
     tty: true

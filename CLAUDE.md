@@ -12,19 +12,34 @@ A shared memory substrate where multiple agents interact via natural language, b
 
 Core API: `MemoryAPI` protocol in `src/memory_protocol.py` — implemented by `MemoryService` (in-process) and `P2PMemoryClient` (peer-to-peer routing).
 
-## Running Modes
-
-### Dev Mode (single process)
-
-Spawns all P2P nodes in-process on localhost with different ports.
+## Quick Start (Make Targets)
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -e ".[dev]"
-docker compose up neo4j -d       # just Neo4j
-cp .env.example .env             # edit with your API key
-python main.py
+make dev              # Full stack in Docker (builds latest, includes CLI)
+make install          # Create venv and install dependencies (for local tests)
+make test             # Run all tests (auto-skips if deps missing)
+make help             # Show all available targets
+```
+
+### Individual Node Targets (for multi-terminal distributed mode)
+
+```bash
+make dev-store        # Store + LLM node on :9000
+make dev-inference    # Inference node on :9001 (needs store node)
+make dev-validator    # Validator node on :9002 (needs store node)
+make dev-cli          # CLI node on :9003 (needs store node)
+```
+
+## Running Modes
+
+### Dev Mode (full stack, Docker)
+
+Builds and runs all services in Docker (Neo4j, store+LLM, inference, validator, CLI). `--build` ensures the latest code is always used. Interactive — includes the CLI.
+
+```bash
+make dev
+# or manually:
+docker compose --profile cli up --build
 ```
 
 ### Distributed Mode (multi-node)
@@ -35,19 +50,18 @@ Each node is a separate process. No Redis required.
 # Option A: Docker (full stack)
 docker compose up
 
-# Option B: Local processes
+# Option B: Make targets (one terminal per node)
+make dev-store         # Terminal 1
+make dev-inference     # Terminal 2
+make dev-validator     # Terminal 3
+make dev-cli           # Terminal 4
+
+# Option C: Manual
 docker compose up neo4j -d
 
-# Terminal 1: Store + LLM node
 python run_node.py --capabilities store,llm --port 9000
-
-# Terminal 2: Inference node
 python run_node.py --capabilities inference --port 9001 --bootstrap http://localhost:9000
-
-# Terminal 3: Validator node
 python run_node.py --capabilities validation --port 9002 --bootstrap http://localhost:9000
-
-# Terminal 4: CLI node
 python run_node.py --capabilities cli --port 9003 --bootstrap http://localhost:9000
 ```
 
@@ -64,6 +78,9 @@ Scale agents: `docker compose up --scale inference-node=3`
 ## Running Tests
 
 ```bash
+make test                         # all tests (auto-skips if deps missing)
+make test-all                     # starts Neo4j first, then runs all tests
+make test-unit                    # unit tests only (no Neo4j, no API key)
 pytest tests/test_store.py        # store only (needs Neo4j)
 pytest -m "not llm"               # skip LLM tests
 pytest                            # all tests (needs Neo4j + API key)

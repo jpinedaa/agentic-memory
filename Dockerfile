@@ -7,6 +7,6 @@ RUN pip install --no-cache-dir -e .
 
 COPY src/ src/
 COPY prompts/ prompts/
-COPY main.py run_node.py ./
+COPY main.py run_node.py logging*.json ./
 
 CMD ["python", "run_node.py", "--capabilities", "store,llm", "--port", "9000"]

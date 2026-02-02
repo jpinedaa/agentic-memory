@@ -9,14 +9,8 @@ install: ## Install dependencies in venv
 	python3 -m venv .venv
 	.venv/bin/pip install -e ".[dev]"
 
-dev: ## Run dev mode (all nodes in-process, starts Neo4j)
-	docker compose up neo4j -d
-	@echo "Waiting for Neo4j..."
-	@for i in $$(seq 1 30); do \
-		docker compose exec neo4j cypher-shell -u neo4j -p memory-system "RETURN 1" >/dev/null 2>&1 && break; \
-		sleep 2; \
-	done
-	.venv/bin/python main.py
+dev: ## Run full stack in Docker (Neo4j + store/LLM + inference + validator + CLI)
+	docker compose --profile cli up --build
 
 dev-store: ## Run just the store+llm node locally
 	.venv/bin/python run_node.py --capabilities store,llm --port 9000
@@ -32,14 +26,8 @@ dev-cli: ## Run a CLI node locally (bootstrap to localhost:9000)
 
 # ── Debug ──────────────────────────────────────────────────────────
 
-debug-agents: ## Run dev mode with DEBUG logging for agents, LLM, and prompts
-	docker compose up neo4j -d
-	@echo "Waiting for Neo4j..."
-	@for i in $$(seq 1 30); do \
-		docker compose exec neo4j cypher-shell -u neo4j -p memory-system "RETURN 1" >/dev/null 2>&1 && break; \
-		sleep 2; \
-	done
-	LOG_CONFIG=logging.debug-agents.json .venv/bin/python main.py
+debug-agents: ## Run full stack with DEBUG logging for agents, LLM, and prompts
+	LOG_CONFIG=logging.debug-agents.json docker compose --profile cli up --build
 
 # ── Testing ─────────────────────────────────────────────────────────
 #
