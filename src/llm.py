@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
+from typing import Any
 
 import anthropic
 
@@ -251,11 +252,20 @@ class LLMTranslator:
         )
 
     async def parse_claim(
-        self, text: str, context: list[dict] | None = None
+        self,
+        text: str,
+        context: list[dict] | None = None,
+        schema_context: dict[str, str] | None = None,
     ) -> ClaimData:
         """Parse a claim text into structured data using tool_use."""
         prompt = self._prompt_loader.load("llm_translator/claim")
-        tpl_vars = ClaimVars(claim_text=text, context=context or [])
+        claim_kwargs: dict[str, Any] = {
+            "claim_text": text,
+            "context": context or [],
+        }
+        if schema_context:
+            claim_kwargs.update(schema_context)
+        tpl_vars = ClaimVars(**claim_kwargs)
         rendered = prompt.render(tpl_vars)
 
         user_content = rendered["user"] or f"Parse this claim:\n{text}"
@@ -340,10 +350,17 @@ class LLMTranslator:
         logger.debug("synthesize_response RESPONSE:\n%s", response.content)
         return self._extract_text(response)
 
-    async def infer(self, observation_text: str) -> str | None:
+    async def infer(
+        self,
+        observation_text: str,
+        schema_context: dict[str, str] | None = None,
+    ) -> str | None:
         """Generate an inference claim from an observation, or None if not meaningful."""
         prompt = self._prompt_loader.load("inference_agent/infer")
-        tpl_vars = InferenceVars(observation_text=observation_text)
+        tpl_vars = InferenceVars(
+            observation_text=observation_text,
+            **(schema_context or {}),
+        )
         rendered = prompt.render(tpl_vars)
 
         system_content = rendered["system"] or ""

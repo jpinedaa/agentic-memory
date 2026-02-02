@@ -1,5 +1,5 @@
 name: claim_parsing
-version: "2.0"
+version: "2.1"
 description: Parse claim text into structured knowledge graph format
 extends: shared/base
 
@@ -12,6 +12,17 @@ system: |
   - Direct observations = highest confidence (0.9-1.0)
 
   Use negated=true for negative assertions (e.g. "user does NOT prefer mornings").
+
+  {% if confidence_priors %}
+  Additional confidence guidance based on predicate type:
+  {{ confidence_priors }}
+  {% endif %}
+
+  {% if normalization_hints %}
+  ## Predicate Normalization
+  Always use the canonical predicate form:
+  {{ normalization_hints }}
+  {% endif %}
 
   {{ constraints }}
 

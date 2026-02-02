@@ -25,7 +25,7 @@ def test_load_prompt(loader: PromptLoader):
     prompt = loader.load("inference_agent/infer")
     assert isinstance(prompt, PromptTemplate)
     assert prompt.name == "inference"
-    assert prompt.version == "1.0"
+    assert prompt.version == "1.1"
 
 
 def test_prompt_not_found(loader: PromptLoader):
@@ -144,6 +144,16 @@ def test_inference_vars_defaults():
     assert vars.observation_text == "test"
     assert vars.observation_id == ""
     assert vars.include_reasoning is False
+    assert vars.predicate_hints == ""
+    assert vars.confidence_priors == ""
+    assert vars.exclusivity_warnings == ""
+
+
+def test_claim_vars_defaults():
+    """ClaimVars schema fields default to empty string."""
+    vars = ClaimVars(claim_text="test")
+    assert vars.normalization_hints == ""
+    assert vars.confidence_priors == ""
 
 
 def test_synthesis_vars_with_results():
@@ -154,3 +164,50 @@ def test_synthesis_vars_with_results():
     )
     assert vars.query == "what does user like?"
     assert len(vars.results) == 1
+
+
+class TestSchemaContextInPrompts:
+
+    def test_inference_with_schema_context(self, loader: PromptLoader):
+        """Schema context sections render in inference prompt."""
+        vars = InferenceVars(
+            observation_text="user likes chess",
+            predicate_hints="- has_hobby (multi-valued, temporal)",
+            confidence_priors="- Temporal predicates: moderate confidence",
+            exclusivity_warnings="- gender: is_male, is_female",
+        )
+        prompt = loader.load("inference_agent/infer")
+        rendered = prompt.render(vars)
+        assert "Known Predicates" in rendered["user"]
+        assert "has_hobby" in rendered["user"]
+        assert "Mutual Exclusivity" in rendered["user"]
+        assert "Confidence Guidance" in rendered["user"]
+
+    def test_inference_empty_schema_no_sections(self, loader: PromptLoader):
+        """Empty schema context omits all schema sections."""
+        vars = InferenceVars(observation_text="test")
+        prompt = loader.load("inference_agent/infer")
+        rendered = prompt.render(vars)
+        assert "Known Predicates" not in rendered["user"]
+        assert "Mutual Exclusivity" not in rendered["user"]
+        assert "Confidence Guidance" not in rendered["user"]
+
+    def test_claim_with_schema_context(self, loader: PromptLoader):
+        """Schema context sections render in claim prompt."""
+        vars = ClaimVars(
+            claim_text="alice has name alice",
+            normalization_hints='- has_name: also known as "is_called"',
+            confidence_priors="- Permanent predicates: use higher confidence",
+        )
+        prompt = loader.load("llm_translator/claim")
+        rendered = prompt.render(vars)
+        assert "Predicate Normalization" in rendered["system"]
+        assert "is_called" in rendered["system"]
+        assert "confidence guidance" in rendered["system"].lower()
+
+    def test_claim_empty_schema_no_sections(self, loader: PromptLoader):
+        """Empty schema context omits schema sections from claim prompt."""
+        vars = ClaimVars(claim_text="test")
+        prompt = loader.load("llm_translator/claim")
+        rendered = prompt.render(vars)
+        assert "Predicate Normalization" not in rendered["system"]

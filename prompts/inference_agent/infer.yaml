@@ -1,5 +1,5 @@
 name: inference
-version: "1.0"
+version: "1.1"
 description: Generate factual claims from observations
 extends: shared/base
 
@@ -11,6 +11,22 @@ user: |
   - Do NOT repeat the observation verbatim — infer the underlying fact or preference
   - Keep it to one sentence
   - If the observation is too vague or meaningless to infer anything from, respond with exactly: SKIP
+
+  {% if predicate_hints %}
+  ## Known Predicates
+  When formulating your claim, prefer these known predicates:
+  {{ predicate_hints }}
+  {% endif %}
+
+  {% if exclusivity_warnings %}
+  ## Mutual Exclusivity
+  {{ exclusivity_warnings }}
+  {% endif %}
+
+  {% if confidence_priors %}
+  ## Confidence Guidance
+  {{ confidence_priors }}
+  {% endif %}
 
   {% if include_reasoning %}
   ## Reasoning Mode

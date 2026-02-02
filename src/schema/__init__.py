@@ -1,5 +1,6 @@
-"""Predicate schema: bootstrap loader, runtime lookups, and persistent store."""
+"""Predicate schema: bootstrap loader, runtime lookups, compiler, and persistent store."""
 
+from src.schema.compiler import SchemaCompiler
 from src.schema.loader import (
     ExclusivityGroup,
     PredicateInfo,
@@ -12,6 +13,7 @@ __all__ = [
     "ExclusivityGroup",
     "PredicateInfo",
     "PredicateSchema",
+    "SchemaCompiler",
     "SchemaStore",
     "load_bootstrap_schema",
 ]

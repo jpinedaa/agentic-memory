@@ -39,6 +39,14 @@ class ClaimVars(BaseModel):
         default_factory=list,
         description="Recent claims and observations for context"
     )
+    normalization_hints: str = Field(
+        default="",
+        description="Schema alias → canonical predicate mappings"
+    )
+    confidence_priors: str = Field(
+        default="",
+        description="Confidence guidance by predicate temporality"
+    )
 
 
 class QueryGenerationVars(BaseModel):
@@ -62,6 +70,18 @@ class InferenceVars(BaseModel):
     include_reasoning: bool = Field(
         default=False,
         description="Whether to include step-by-step reasoning"
+    )
+    predicate_hints: str = Field(
+        default="",
+        description="Known predicates with cardinality/temporality annotations"
+    )
+    confidence_priors: str = Field(
+        default="",
+        description="Confidence guidance by predicate temporality"
+    )
+    exclusivity_warnings: str = Field(
+        default="",
+        description="Mutually exclusive predicate groups"
     )
 
 

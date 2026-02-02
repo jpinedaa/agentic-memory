@@ -89,7 +89,8 @@ class MemoryService:
             {**o, "node_kind": "observation"} for o in recent_obs
         ]
 
-        parsed = await self.llm.parse_claim(text, context)
+        schema_ctx = self._compile_schema_context("claim")
+        parsed = await self.llm.parse_claim(text, context, schema_context=schema_ctx)
 
         # Normalize predicate against schema aliases (e.g. "is_called" → "has_name")
         if self.schema_store is not None:
@@ -229,9 +230,22 @@ class MemoryService:
         """Return all concept nodes."""
         return await self.store.get_all_concepts()
 
+    def _compile_schema_context(self, target: str) -> dict[str, str] | None:
+        """Compile schema fragments for a specific LLM call target."""
+        if self.schema_store is None:
+            return None
+        from src.schema.compiler import SchemaCompiler
+        compiler = SchemaCompiler(self.schema_store.schema)
+        if target == "infer":
+            return compiler.for_inference()
+        if target == "claim":
+            return compiler.for_claim_parser()
+        return None
+
     async def infer(self, observation_text: str) -> str | None:
         """Use the LLM to produce an inference claim from an observation."""
-        return await self.llm.infer(observation_text)
+        ctx = self._compile_schema_context("infer")
+        return await self.llm.infer(observation_text, schema_context=ctx)
 
     async def get_schema(self) -> dict[str, Any]:
         """Return the current schema as a serializable dict."""

@@ -41,6 +41,7 @@ class ValidatorAgent(WorkerAgent):
             agent_type="validator",
         )
         self._schema = schema
+        self._unknown_predicates: dict[str, int] = {}
 
     def event_types(self) -> list[str]:
         return ["claim", "schema_updated"]
@@ -58,6 +59,18 @@ class ValidatorAgent(WorkerAgent):
                 )
         if event_type in self.event_types():
             self._event_received.set()
+
+    def get_unknown_predicates(self) -> dict[str, int]:
+        """Return predicates encountered that are not in the schema.
+
+        Maps predicate name to encounter count. Intended for observability
+        and future schema agent consumption.
+        """
+        return dict(self._unknown_predicates)
+
+    def clear_unknown_predicates(self) -> None:
+        """Clear the unknown predicates tracker."""
+        self._unknown_predicates.clear()
 
     async def process(self) -> list[str]:  # pylint: disable=too-many-locals
         """Check for contradicting statements and flag them.
@@ -96,6 +109,15 @@ class ValidatorAgent(WorkerAgent):
         if flagged:
             self._last_action = f"Flagged {flagged} contradiction(s)"
 
+        if self._unknown_predicates:
+            logger.info(
+                "Unknown predicates encountered: %s",
+                dict(sorted(
+                    self._unknown_predicates.items(),
+                    key=lambda x: -x[1],
+                )[:10]),
+            )
+
         # Return empty — contradictions flagged directly, not via claim()
         return []
 
@@ -116,13 +138,24 @@ class ValidatorAgent(WorkerAgent):
             if len(pred_statements) < 2:
                 continue
 
-            # Schema check: skip multi-valued predicates
-            if self._schema and self._schema.is_multi_valued(predicate):
-                logger.debug(
-                    "Skipping multi-valued predicate '%s' for %s",
-                    predicate, subject,
-                )
-                continue
+            # Schema check: skip multi-valued predicates, track unknowns
+            if self._schema:
+                info = self._schema.get_info(predicate)
+                if info is None:
+                    self._unknown_predicates[predicate] = (
+                        self._unknown_predicates.get(predicate, 0) + 1
+                    )
+                    logger.info(
+                        "Unknown predicate '%s' for subject '%s' "
+                        "(defaulting to single-valued)",
+                        predicate, subject,
+                    )
+                elif info.cardinality == "multi":
+                    logger.debug(
+                        "Skipping multi-valued predicate '%s' for %s",
+                        predicate, subject,
+                    )
+                    continue
 
             for i, s1 in enumerate(pred_statements):
                 for s2 in pred_statements[i + 1:]:

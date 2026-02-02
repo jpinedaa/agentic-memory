@@ -301,3 +301,71 @@ class TestInferenceAgent:
         agent = InferenceAgent(memory=mock_memory, schema=schema)
         await agent.on_network_event("schema_updated", {})
         assert agent._schema is schema
+
+
+class TestUnknownPredicateTracking:
+
+    @pytest.mark.asyncio
+    async def test_tracks_unknown_predicate(
+        self, schema, mock_memory, mock_state,
+    ):
+        mock_memory.get_recent_statements.return_value = [
+            _stmt("s1", "alice", "invented_pred", "val1"),
+            _stmt("s2", "alice", "invented_pred", "val2"),
+        ]
+        agent = ValidatorAgent(
+            memory=mock_memory, schema=schema, state=mock_state,
+        )
+        await agent.process()
+        unknowns = agent.get_unknown_predicates()
+        assert "invented_pred" in unknowns
+        assert unknowns["invented_pred"] == 1
+
+    @pytest.mark.asyncio
+    async def test_known_predicate_not_tracked(
+        self, schema, mock_memory, mock_state,
+    ):
+        mock_memory.get_recent_statements.return_value = [
+            _stmt("s1", "alice", "has_name", "alice"),
+            _stmt("s2", "alice", "has_name", "bob"),
+        ]
+        agent = ValidatorAgent(
+            memory=mock_memory, schema=schema, state=mock_state,
+        )
+        await agent.process()
+        assert agent.get_unknown_predicates() == {}
+
+    @pytest.mark.asyncio
+    async def test_no_schema_no_tracking(self, mock_memory, mock_state):
+        """Without schema, no tracking occurs."""
+        mock_memory.get_recent_statements.return_value = [
+            _stmt("s1", "alice", "anything", "val1"),
+            _stmt("s2", "alice", "anything", "val2"),
+        ]
+        agent = ValidatorAgent(
+            memory=mock_memory, schema=None, state=mock_state,
+        )
+        await agent.process()
+        assert agent.get_unknown_predicates() == {}
+
+    @pytest.mark.asyncio
+    async def test_count_accumulates(
+        self, schema, mock_memory, mock_state,
+    ):
+        mock_memory.get_recent_statements.return_value = [
+            _stmt("s1", "alice", "invented_pred", "v1"),
+            _stmt("s2", "alice", "invented_pred", "v2"),
+        ]
+        agent = ValidatorAgent(
+            memory=mock_memory, schema=schema, state=mock_state,
+        )
+        await agent.process()
+        mock_state.is_processed.return_value = False
+        await agent.process()
+        assert agent.get_unknown_predicates()["invented_pred"] == 2
+
+    def test_clear_unknown_predicates(self, schema, mock_memory):
+        agent = ValidatorAgent(memory=mock_memory, schema=schema)
+        agent._unknown_predicates["test"] = 5
+        agent.clear_unknown_predicates()
+        assert agent.get_unknown_predicates() == {}

@@ -87,6 +87,16 @@ class PredicateSchema:
         """Return all known canonical predicate names."""
         return list(self._predicates.keys())
 
+    @property
+    def predicates(self) -> dict[str, PredicateInfo]:
+        """All predicate entries (read-only copy)."""
+        return dict(self._predicates)
+
+    @property
+    def exclusivity_groups(self) -> list[ExclusivityGroup]:
+        """All exclusivity groups."""
+        return list(self._exclusivity_groups)
+
     def to_dict(self) -> dict[str, Any]:
         """Serialize to a dict matching the YAML schema format."""
         predicates: dict[str, dict[str, Any]] = {}
