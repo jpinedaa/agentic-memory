@@ -34,8 +34,10 @@ class MemoryService:
     async def observe(self, text: str, source: str) -> str:
         """Record an observation from the external world.
 
-        The LLM extracts concepts (with decomposition) and statements
-        from the text. Returns the observation node ID.
+        The LLM extracts concepts (with decomposition) from the text.
+        Statements are NOT created here — the inference agent is
+        responsible for all statement creation from observations.
+        Returns the observation node ID.
         """
         obs_id = _new_id()
         extraction = await self.llm.extract_observation(text)
@@ -48,12 +50,10 @@ class MemoryService:
         await self.store.create_relationship(obs_id, "RECORDED_BY", source_id)
 
         # Create concepts and link to observation
-        concept_ids: dict[str, str] = {}
         for concept in extraction.concepts:
             cid = await self.store.get_or_create_concept(
                 concept.name, _new_id(), kind=concept.kind
             )
-            concept_ids[concept.name] = cid
             await self.store.create_relationship(obs_id, "MENTIONS", cid)
 
             # Decompose compound concepts
@@ -65,32 +65,14 @@ class MemoryService:
                     cid, "RELATED_TO", comp_id, {"relation": component.relation}
                 )
 
-        # Create statements (reified triples)
-        for stmt in extraction.statements:
-            stmt_id = _new_id()
-            await self.store.create_statement(
-                stmt_id, stmt.predicate, stmt.confidence, stmt.negated
-            )
-
-            subj_id = concept_ids.get(stmt.subject) or await self.store.get_or_create_concept(
-                stmt.subject, _new_id()
-            )
-            obj_id = concept_ids.get(stmt.object) or await self.store.get_or_create_concept(
-                stmt.object, _new_id()
-            )
-
-            await self.store.create_relationship(stmt_id, "ABOUT_SUBJECT", subj_id)
-            await self.store.create_relationship(stmt_id, "ABOUT_OBJECT", obj_id)
-            await self.store.create_relationship(stmt_id, "DERIVED_FROM", obs_id)
-            await self.store.create_relationship(stmt_id, "ASSERTED_BY", source_id)
-
         return obs_id
 
     async def claim(self, text: str, source: str) -> str:
-        """Assert a claim (inference, fact, contradiction, or resolution).
+        """Assert a claim (inference, fact, or resolution).
 
-        The LLM parses the claim, identifies basis, confidence, and
-        contradiction/supersession. Returns the statement node ID.
+        The LLM parses the claim into structured data. Contradiction
+        detection is NOT done here — that's the validator agent's job
+        via flag_contradiction(). Returns the statement node ID.
         """
         # Gather recent context for the LLM to reference
         recent_statements = await self.store.find_recent_statements(limit=10)
@@ -125,7 +107,7 @@ class MemoryService:
                     stmt_id, "DERIVED_FROM", basis_node["id"]
                 )
 
-        # Link supersession
+        # Link supersession (explicit resolution, not contradiction detection)
         if parsed.supersedes_description:
             superseded = await self._find_matching_node(
                 parsed.supersedes_description
@@ -133,16 +115,6 @@ class MemoryService:
             if superseded:
                 await self.store.create_relationship(
                     stmt_id, "SUPERSEDES", superseded["id"]
-                )
-
-        # Link contradiction
-        if parsed.contradicts_description:
-            contradicted = await self._find_matching_node(
-                parsed.contradicts_description
-            )
-            if contradicted:
-                await self.store.create_relationship(
-                    stmt_id, "CONTRADICTS", contradicted["id"]
                 )
 
         return stmt_id

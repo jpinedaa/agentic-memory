@@ -47,23 +47,6 @@ async def test_parse_claim(translator: LLMTranslator):
     assert 0.0 <= result.confidence <= 1.0
 
 
-async def test_parse_claim_with_contradiction(translator: LLMTranslator):
-    context = [
-        {
-            "node_kind": "statement",
-            "subject_name": "user",
-            "predicate": "prefers",
-            "object_name": "morning meetings",
-            "confidence": 0.7,
-        }
-    ]
-    result = await translator.parse_claim(
-        "the claim that user prefers morning meetings contradicts the observation that user hates early meetings",
-        context=context,
-    )
-    assert result.contradicts_description is not None
-
-
 async def test_generate_query(translator: LLMTranslator):
     cypher = await translator.generate_query("what are the user's meeting preferences?")
     assert isinstance(cypher, str)
