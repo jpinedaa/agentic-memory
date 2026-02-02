@@ -2,7 +2,7 @@
 
 ## Project Briefing
 
-This is a shared memory substrate where multiple AI agents interact via natural language, with a Neo4j graph database storing knowledge as reified triples. The graph uses four proper Neo4j labels: `:Concept` (named things/ideas/values), `:Statement` (reified triples with predicate, confidence, negation), `:Observation` (raw input), and `:Source` (provenance — who produced the knowledge). All knowledge flows through Statement nodes linked to subject/object Concepts via `ABOUT_SUBJECT`/`ABOUT_OBJECT`, with provenance via `DERIVED_FROM` and `ASSERTED_BY`. Compound concepts are decomposed via `RELATED_TO` edges (e.g., "peer-to-peer network" → "network" + "peer-to-peer"). There are no dynamic predicate edges — all assertions are Statement nodes. The system uses a peer-to-peer architecture (v0.3) where every node is identical in networking (HTTP server + WebSocket + HTTP client) and differs only in capabilities (store, LLM, inference, validation, CLI), coordinating via gossip with no centralized server or Redis. The React + D3.js dashboard (port 3000) is connected to the P2P backend via a UI bridge layer (`src/p2p/ui_bridge.py`). 88 non-LLM tests passing.
+This is a shared memory substrate where multiple AI agents interact via natural language, with a Neo4j graph database storing knowledge as reified triples. The graph uses four proper Neo4j labels: `:Concept` (named things/ideas/values), `:Statement` (reified triples with predicate, confidence, negation), `:Observation` (raw input), and `:Source` (provenance — who produced the knowledge). All knowledge flows through Statement nodes linked to subject/object Concepts via `ABOUT_SUBJECT`/`ABOUT_OBJECT`, with provenance via `DERIVED_FROM` and `ASSERTED_BY`. Compound concepts are decomposed via `RELATED_TO` edges (e.g., "peer-to-peer network" → "network" + "peer-to-peer"). There are no dynamic predicate edges — all assertions are Statement nodes. The system uses a peer-to-peer architecture (v0.3) where every node is identical in networking (HTTP server + WebSocket + HTTP client) and differs only in capabilities (store, LLM, inference, validation, CLI), coordinating via gossip with no centralized server or Redis. The React + D3.js dashboard (port 3000) is connected to the P2P backend via a UI bridge layer (`src/p2p/ui_bridge.py`). 109 non-LLM tests passing.
 
 **Next up:** Multi-node integration tests, NAT traversal, TLS. See `docs/knowledge_representation.md` for the full knowledge model and `docs/visual_ui_design.md` for UI design decisions.
 
@@ -128,11 +128,45 @@ prompts/                 → YAML prompt templates (organized by agent)
 src/cli.py               → stdin/stdout chat adapter
 src/agents/base.py       → WorkerAgent ABC (event-driven + poll fallback)
 src/agents/inference.py  → observations → claims
-src/agents/validator.py  → contradiction detection
+src/agents/validator.py  → schema-aware contradiction detection
+src/schema/              → bootstrap predicate schema (YAML + loader)
 main.py                  → dev mode (in-process, multiple P2P nodes)
 run_node.py              → unified distributed node entry point
 ui/                      → React + D3.js dashboard (separate container, port 3000)
 ```
+
+## Debugging Running Nodes (make dev)
+
+When the user has `make dev` running, you can query the live system to debug issues. The store node (port 9000) exposes HTTP endpoints:
+
+```bash
+# Node health + peer count
+curl -s http://localhost:9000/p2p/health
+
+# Full graph (nodes + edges) — uses ui_bridge, handles neo4j type serialization
+curl -s http://localhost:9000/v1/graph/nodes
+
+# Network + knowledge stats (observations, statements, concepts, sources, relationships)
+curl -s http://localhost:9000/v1/stats
+
+# Docker container logs per node
+docker compose logs store-node --tail 30
+docker compose logs inference-node --tail 30
+docker compose logs validator-node --tail 30
+docker compose logs cli-node --tail 30
+```
+
+**Ports**: store=9000, inference=9001, validator=9002, CLI=9003. In Docker, all nodes listen internally on :9000 but are mapped to these host ports.
+
+**Tip**: The `/v1/graph/nodes` endpoint returns the complete graph with all nodes and edges — pipe through `python3 -m json.tool` or jq for readable output. You can filter for specific edge types (e.g., `CONTRADICTS`, `DERIVED_FROM`) to verify relationship creation.
+
+### Known Issue: P2P Response Serialization
+
+`neo4j.time.DateTime` objects in store query results (e.g., `created_at` fields) cause FastAPI serialization failures in the P2P message handler (`transport.py:_handle_message`). This breaks remote read operations (`get_recent_statements`, `get_recent_observations`) while write operations (`observe`, `claim`, `flag_contradiction`) succeed because they return simple string IDs.
+
+The ui_bridge avoids this with a `_json_safe()` helper that converts unknown types to `str()`. The P2P transport layer needs the same treatment in `Envelope.to_dict()` or in `_handle_message`.
+
+**Impact**: Inference and validator agents fail on every tick when running as separate nodes (Docker `make dev` mode). The CLI `observe` and `?query` work because they route to the store node which handles them locally.
 
 ## Development
 
