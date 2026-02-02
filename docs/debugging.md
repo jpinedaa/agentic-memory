@@ -5,7 +5,7 @@ How to configure logging, debug agent behavior, and create custom debug profiles
 ## Quick Start
 
 ```bash
-# Normal run (INFO level)
+# Normal run (INFO level, resets Neo4j graph)
 make dev
 
 # Debug agents, LLM calls, and prompt rendering

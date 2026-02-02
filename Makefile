@@ -1,5 +1,8 @@
 .PHONY: help dev test test-all test-unit docker-build docker-up docker-down docker-logs clean install lint
 
+# ── Configuration ──────────────────────────────────────────────────
+ENV_FILE ?= .env
+
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
 
@@ -9,15 +12,22 @@ install: ## Install dependencies in venv
 	python3 -m venv .venv
 	.venv/bin/pip install -e ".[dev]"
 
-dev: ## Run full stack in Docker (Neo4j + store/LLM + inference + validator + CLI)
+dev: ## Run full stack in Docker (resets Neo4j graph, rebuilds all images)
+	@if [ ! -f "$(ENV_FILE)" ]; then \
+		echo "Error: env file '$(ENV_FILE)' not found."; \
+		echo "  Copy .env.example to .env and fill in your keys, or pass ENV_FILE=path/to/.env"; \
+		exit 1; \
+	fi
 	@bash -c '\
-		cleanup() { echo ""; echo "Shutting down all containers..."; docker compose down --remove-orphans; }; \
+		cleanup() { echo ""; echo "Shutting down all containers..."; docker compose --profile cli down -v --remove-orphans; }; \
 		trap cleanup EXIT; \
-		docker compose down --remove-orphans 2>/dev/null || true; \
-		docker compose up --build -d && \
+		docker compose --profile cli down -v --remove-orphans 2>/dev/null || true; \
+		docker compose --env-file $(ENV_FILE) --profile cli up --build -d && \
 		echo "Waiting for store node..." && \
 		until docker compose exec store-node python -c "import urllib.request; urllib.request.urlopen(\"http://localhost:9000/p2p/health\")" 2>/dev/null; do sleep 2; done && \
-		docker compose run --rm --no-deps --build cli-node \
+		echo "Waiting for CLI node..." && \
+		until docker compose exec cli-node python -c "import urllib.request; urllib.request.urlopen(\"http://localhost:9000/p2p/health\")" 2>/dev/null; do sleep 2; done && \
+		docker compose attach cli-node \
 	'
 
 dev-store: ## Run just the store+llm node locally
@@ -35,14 +45,21 @@ dev-cli: ## Run a CLI node locally (bootstrap to localhost:9000)
 # ── Debug ──────────────────────────────────────────────────────────
 
 debug-agents: ## Run full stack with DEBUG logging for agents, LLM, and prompts
+	@if [ ! -f "$(ENV_FILE)" ]; then \
+		echo "Error: env file '$(ENV_FILE)' not found."; \
+		echo "  Copy .env.example to .env and fill in your keys, or pass ENV_FILE=path/to/.env"; \
+		exit 1; \
+	fi
 	@bash -c '\
-		cleanup() { echo ""; echo "Shutting down all containers..."; docker compose down --remove-orphans; }; \
+		cleanup() { echo ""; echo "Shutting down all containers..."; docker compose --profile cli down -v --remove-orphans; }; \
 		trap cleanup EXIT; \
-		docker compose down --remove-orphans 2>/dev/null || true; \
-		docker compose up --build -d && \
+		docker compose --profile cli down -v --remove-orphans 2>/dev/null || true; \
+		LOG_CONFIG=logging.debug-agents.json docker compose --env-file $(ENV_FILE) --profile cli up --build -d && \
 		echo "Waiting for store node..." && \
 		until docker compose exec store-node python -c "import urllib.request; urllib.request.urlopen(\"http://localhost:9000/p2p/health\")" 2>/dev/null; do sleep 2; done && \
-		LOG_CONFIG=logging.debug-agents.json docker compose run --rm --no-deps --build cli-node \
+		echo "Waiting for CLI node..." && \
+		until docker compose exec cli-node python -c "import urllib.request; urllib.request.urlopen(\"http://localhost:9000/p2p/health\")" 2>/dev/null; do sleep 2; done && \
+		docker compose attach cli-node \
 	'
 
 # ── Testing ─────────────────────────────────────────────────────────
