@@ -575,6 +575,7 @@ Human → Chat Interface → remember("what are my meeting preferences?")
 3. **Scoping/namespacing**: Can there be isolated memory regions?
 4. **Access control**: Can certain claims be private to certain agents?
 5. **Agent framework integration**: How to best wrap MemoryAPI as tools for LangGraph, CrewAI, etc.?
+6. **Coreference resolution**: Recognizing that two concepts refer to the same entity (e.g., "my girlfriend" and "Ami"). Statements can bridge these (`my girlfriend | has_name | Ami`) but there is no automatic propagation. Separate concern from schema evolution — see [Knowledge Representation](knowledge_representation.md).
 
 ---
 

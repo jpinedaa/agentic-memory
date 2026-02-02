@@ -274,9 +274,15 @@ When `claim()` links a new statement to its basis, it uses word-overlap heuristi
 
 A static bootstrap schema (`src/schema/bootstrap.yaml`) defines predicate cardinality (single/multi), temporality, aliases, and exclusivity groups. The validator checks this schema before flagging contradictions — multi-valued predicates like "has hobby" are skipped. Unknown predicates default to single-valued. A dynamic schema agent will eventually replace/augment this. See [Schema Agent Design](schema_agent_design.md).
 
-### No concept merging
+### Coreference resolution
 
-If observations produce `Concept("my girlfriend")` and `Concept("ami")`, the system does not automatically recognize these as the same person. A concept-merging agent could create `RELATED_TO {relation: "synonym"}` links.
+If observations produce `Concept("my girlfriend")` and `Concept("ami")`, the system does not automatically recognize these as the same entity. Statements can bridge this (e.g., `my girlfriend | has_name | ami`), but there is no automatic coreference — when a later observation says "Ami likes hiking", the system won't know to connect it to "my girlfriend" without an explicit linking statement.
+
+This is a distinct problem from schema evolution:
+- **Schema** is about *how to interpret predicates* (cardinality, temporality, aliases)
+- **Coreference** is about *recognizing that two concepts refer to the same thing*
+
+A future coreference agent could detect these patterns and create `RELATED_TO {relation: "same_as"}` links, or merge concepts. This is tracked as a separate concern from the schema evolution design.
 
 ### LLM extraction quality
 

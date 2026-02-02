@@ -4,11 +4,13 @@ A dynamic schema layer that evolves alongside the knowledge graph and shapes how
 
 ---
 
-## 1. Core Idea
+## 1. Core Idea: Learn to Learn
 
-Instead of the schema being a static configuration that developers write, it's a **living layer** that evolves alongside the knowledge graph. A schema agent observes patterns in the graph and produces schema knowledge that dynamically shapes how other agents (inference, validator, future agents) operate.
+The schema is how the system **learns to learn**. As observations flow in, the system doesn't just accumulate domain knowledge — it develops meta-knowledge about *how to process* that knowledge. The schema evolves alongside the graph, shaping how all agents operate.
 
-The schema is not just "facts about predicates stored in the graph." It's an **operational framework** — schema knowledge gets injected into agent behavior at runtime, changing their prompts, decision logic, and constraints.
+Instead of a static configuration that developers write, the schema is a **living layer**. A schema agent observes patterns in the graph and produces schema knowledge that dynamically shapes how other agents (inference, validator, future agents) operate.
+
+The schema is not just "facts about predicates stored in the graph." It's an **operational framework** — schema knowledge gets injected into agent behavior at runtime, changing their prompts, decision logic, and constraints. The system should eventually converge on a schema that makes sense given the observations it has processed so far.
 
 ---
 
@@ -68,12 +70,12 @@ exclusivity_groups:
 The schema isn't a database that agents query on every tick. It's a **template/framework layer** that gets compiled into agent behavior:
 
 ```
-Schema Knowledge (YAML → future: graph)
+Schema Source (bootstrap YAML → future: store-node persistent file)
        │
        ▼
 ┌─────────────────────┐
 │   Schema Loader      │  Reads schema from YAML (Phase 0)
-│   (future: Compiler) │  or from graph (Phase 2+)
+│   (future: Compiler) │  or from store-node file (Phase 2+)
 └──────────┬──────────┘
            │
            ▼
@@ -86,6 +88,10 @@ Schema Knowledge (YAML → future: graph)
      ▼     ▼         ▼
  Inference Validator  Future
   Agent    Agent     Agents
+                       ▲
+                       │
+              schema_updated event
+              (P2P broadcast on change)
 ```
 
 Concretely, this could mean:
@@ -98,17 +104,75 @@ Concretely, this could mean:
 
 ## 5. Schema Agent Behavior
 
-The schema agent is different from other agents. It doesn't process individual observations or statements — it observes **patterns** across the graph:
+The schema agent is fundamentally different from other agents. It doesn't process individual observations or statements — it observes **patterns** across the graph and uses **LLM reasoning** to understand what those patterns mean.
 
-**Triggers:**
-- New predicate appears (never seen before) → initialize with defaults
-- Same predicate accumulates multiple objects for same subject without contradictions → infer multi-valued
-- Contradiction is flagged but later both values confirmed → revise cardinality assumption
-- Multiple predicates appear to mean the same thing → propose synonymy
+### 5.1 LLM-Powered Reasoning (Not Statistical Counting)
 
-**Output:**
-- Schema claims stored in the graph (using existing Statement machinery, with schema-specific concepts like `predicate:has_name` as subject)
-- Or: a dedicated schema store (simpler, avoids polluting the instance graph)
+The schema agent uses an LLM because schema decisions require understanding, not thresholds. Raw pattern counts are **input context** — the LLM makes the **decision**.
+
+Examples of why this matters:
+
+| Pattern observed | Statistical approach | LLM reasoning |
+|---|---|---|
+| `lives_in: "NYC"` and `lives_in: "USA"` for same person | "Two values → multi-valued" (wrong) | "NYC is within USA — different granularity, not a conflict. Still single-valued." |
+| New predicate `mentors` appears | "Unknown → use defaults" | "Mentoring is a one-to-many relationship. Likely multi-valued." |
+| `is_called` and `has_name` used for same subjects | "Co-occurrence → maybe alias" | "These mean the same thing semantically. Alias." |
+| `born_in` never changes across observations | "No changes → maybe permanent" | "Birth is a one-time event. Permanent." |
+
+The LLM brings world knowledge and semantic understanding that no counting heuristic can match. This is the core reason the schema agent exists as an LLM-powered agent rather than a rule-based system.
+
+### 5.2 Node Architecture
+
+The schema agent runs on its **own dedicated node** with `schema` capability, following the same pattern as inference and validator agents:
+
+```
+Schema Agent Node (capability: schema)
+    │
+    ├─→ Reads statement patterns via P2PMemoryClient (routes to store)
+    ├─→ Reasons about patterns via LLM (routes to llm peer)
+    ├─→ Sends schema updates to store node (new protocol method)
+    │
+    └─→ Store node persists + broadcasts schema_updated event
+```
+
+Required peer capabilities: `store` (to read patterns), `llm` (to reason about them).
+
+### 5.3 What the Schema Agent Observes
+
+The agent periodically gathers context from the graph and presents it to the LLM:
+
+- **Predicate usage patterns**: For each predicate, how many subjects use it, how many have multiple objects, what the objects look like
+- **Contradiction history**: Which predicates have been flagged, which were resolved via supersession vs. left standing
+- **Predicate co-occurrence**: Which predicates tend to appear together, suggesting possible aliases or groupings
+- **New/unknown predicates**: Predicates that appear in statements but aren't yet in the schema
+
+### 5.4 What the Schema Agent Decides
+
+The LLM reasons about the gathered context and can:
+
+- **Classify a new predicate**: cardinality, temporality, and initial confidence
+- **Revise an existing predicate**: change cardinality or temporality based on accumulated evidence
+- **Propose aliases**: merge predicates that mean the same thing
+- **Propose exclusivity groups**: identify mutually exclusive predicates
+- **Explain its reasoning**: each schema update includes the LLM's rationale (stored as provenance)
+
+### 5.5 Convergence Through Evidence
+
+Each schema property carries an **evidence summary** — not raw counts, but LLM-generated reasoning about why the current value is correct. When the schema agent revisits a predicate, it sees:
+
+1. The current schema entry and its reasoning
+2. New evidence since the last review
+3. Any contradictions or anomalies related to this predicate
+
+The LLM then decides whether the new evidence warrants a change. Because it can read its own prior reasoning, it avoids oscillation — it won't flip a value back and forth without a compelling reason the prior reasoning missed.
+
+Bootstrap schema entries carry `origin: bootstrap` and the LLM treats them as strong priors that require substantial evidence to override.
+
+### 5.6 Output
+
+- Schema updates sent to store node via new `update_schema()` protocol method
+- Store node persists to file (outside Neo4j) and broadcasts `schema_updated` P2P event
+- Each update includes: what changed, the LLM's reasoning, and the evidence it considered
 
 ---
 
@@ -118,41 +182,70 @@ The schema agent is different from other agents. It doesn't process individual o
 |---|---|---|
 | **Inference** | Extracts triples from observations using LLM prompts | Schema constraints injected into prompts: predicate normalization, confidence priors, domain/range hints |
 | **Validator** | Checks bootstrap schema cardinality + exclusivity groups | Dynamic schema replaces bootstrap; reports unknown predicates to schema agent |
-| **Schema** | (new) | Observes predicate patterns, evolves schema, compiles constraints for other agents |
+| **Schema** | (new) | Own node with `schema` capability. Uses LLM to reason about predicate patterns, evolves schema, sends updates to store node. |
 | **Future agents** | — | All receive schema-derived constraints via the same framework |
 
 ---
 
-## 7. Open Questions
+## 7. Design Decisions
 
-- **Where does dynamic schema live?** In the same graph (predicates as Concept nodes with `kind: "predicate"`)? Or a separate lightweight store (JSON/YAML that gets reloaded)?
-- **Authority**: When the schema agent and a human disagree, who wins? Should users be able to pin schema decisions?
-- **Compilation frequency**: Does the schema compile into agent constraints once at startup, or does it hot-reload as the schema evolves?
-- **Schema scope**: Per-subject-type schemas? (A person's "has name" is single-valued, but an organization's might not be.) Or global per-predicate?
+These questions from the original design have been resolved:
+
+### 7.1 Where does dynamic schema live?
+
+**Decision**: On the store node, but **not inside the Neo4j graph**.
+
+The graph holds domain knowledge (what the system knows about the world). Schema is meta-knowledge — knowledge about *how to interpret and validate* domain knowledge. Mixing them in the same graph would blur that boundary and create circular dependencies (schema shapes how statements are validated, so schema can't itself be a statement subject to the same validation).
+
+The store node owns the schema as a separate persistent artifact (file-based or embedded store). Other nodes receive compiled schema via P2P events.
+
+### 7.2 Authority and human intervention
+
+**Decision**: The system is designed to run **autonomously and converge** toward a schema that makes sense given the observations so far. There is no human-in-the-loop for schema decisions during normal operation.
+
+Human intervention (inspection, override, correction) is a separate concern that can be layered on later — e.g., an admin API or dashboard for reviewing schema state. But the core design goal is a system that learns and self-corrects without human input.
+
+### 7.3 Compilation and propagation
+
+**Decision**: **Hot-reload via P2P event signaling**.
+
+When the schema agent updates the schema, the store node persists the change and broadcasts a `schema_updated` event through the P2P network. All connected nodes (inference, validator, future agents) receive the event and reload their schema constraints. This uses the existing event flooding mechanism (TTL-based hop limit + msg_id dedup).
+
+### 7.4 Schema scope
+
+**Open**. Global per-predicate is the starting point (matching the bootstrap schema). Per-subject-type scoping (e.g., a person's "has_name" is single-valued but an organization's might not be) is a potential evolution but adds significant complexity.
+
+## 8. Open Questions
+
+- **Schema scope refinement**: When/if to introduce per-subject-type predicate rules
+- **Convergence guarantees**: The LLM sees its own prior reasoning when revisiting predicates, which naturally resists oscillation. But pathological cases (genuinely ambiguous predicates) may still flip. Should there be a stability rule (e.g., don't re-evaluate a predicate within N claims of the last change)?
+- **Schema versioning**: How to handle in-flight statements when schema changes (do existing statements get re-validated?)
+- **Coreference**: Entity resolution ("my girlfriend" = "Ami") is a related but separate problem — see [Knowledge Representation](knowledge_representation.md). Should the schema agent have any role in coreference, or is that a distinct agent?
 
 ---
 
-## 8. Implementation Phases
+## 9. Implementation Phases
 
 | Phase | Scope | Status |
 |---|---|---|
 | 0. Bootstrap schema | Static YAML schema with predicate cardinality, temporality, exclusivity groups. Loaded at startup, injected into validator. | **Done** |
-| 1. Schema data model | Decide where dynamic schema lives, define schema node/property structure | Design phase |
-| 2. Schema agent (basic) | Observe predicate patterns, infer cardinality | Not started |
-| 3. Schema compiler | Render schema into agent constraints (prompt injection, decision guards) | Not started |
-| 4. Schema-aware inference | Inference agent normalizes predicates, uses confidence priors | Not started |
-| 5. Schema-aware validation (dynamic) | Validator reads dynamic schema instead of bootstrap; reports unknown predicates | Not started |
+| 1. Schema data model | Schema stored on store node (not Neo4j). Persistent file format, `schema_updated` P2P event, hot-reload on all nodes. | **Design phase** |
+| 2. Schema agent (basic) | Own node with `schema` capability. LLM-powered reasoning about predicate patterns — cardinality, temporality, aliases. Needs `store` + `llm` peers. | Not started |
+| 3. Schema compiler | Render schema into agent constraints (prompt injection, decision guards). Triggered by `schema_updated` events. | Not started |
+| 4. Schema-aware inference | Inference agent normalizes predicates, uses confidence priors from schema. | Not started |
+| 5. Schema-aware validation (dynamic) | Validator reads dynamic schema instead of bootstrap; reports unknown predicates to schema agent. | Not started |
 
 ---
 
 ## See Also
 
-- [Knowledge Representation](knowledge_representation.md) — Current data model
+- [Schema Framework Spec](schema_framework_spec.md) — Phase 1 implementation specification (data model, protocol, propagation, hot-reload)
+- [Knowledge Representation](knowledge_representation.md) — Current data model (includes coreference as a tracked concern)
 - [Validation Redesign](validation_redesign.md) — Contradiction detection and lifecycle
 - [Design Tracking](design_tracking.md) — System architecture
 
 ---
 
-*Document version: 0.2*
+*Document version: 0.4*
 *Last updated: 2026-02-02*
-*Status: Phase 0 (bootstrap schema) implemented. Dynamic schema agent design in progress.*
+*Status: Phase 0 (bootstrap schema) implemented. Phase 1 data model and schema framework design in progress.*
