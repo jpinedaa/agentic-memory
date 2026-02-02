@@ -147,6 +147,23 @@ class MemoryService:
 
         return stmt_id
 
+    async def flag_contradiction(
+        self, stmt_id_1: str, stmt_id_2: str, reason: str = ""
+    ) -> None:
+        """Create a CONTRADICTS relationship between two statements directly.
+
+        Used by the validator agent to bypass the LLM round-trip when it
+        already has exact statement IDs.
+        """
+        props = {"reason": reason} if reason else None
+        await self.store.create_relationship(
+            stmt_id_1, "CONTRADICTS", stmt_id_2, props
+        )
+        logger.info(
+            "Flagged contradiction: %s <-> %s (reason: %s)",
+            stmt_id_1, stmt_id_2, reason or "none",
+        )
+
     async def remember(self, query: str) -> str:
         """Query the knowledge graph and return a resolved natural language response."""
         # Generate and execute the graph query

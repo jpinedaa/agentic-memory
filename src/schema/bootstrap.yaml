@@ -1,0 +1,83 @@
+# Bootstrap predicate schema — Phase 0
+# Provides static predicate metadata for schema-aware validation.
+# This will be augmented/replaced by the dynamic schema agent (Phase 2+).
+version: "0.1"
+
+defaults:
+  cardinality: single
+  temporality: unknown
+
+predicates:
+  # Identity (single-valued, permanent)
+  has_name:
+    cardinality: single
+    temporality: permanent
+    aliases: [is_called, is_named, named]
+  has_full_name:
+    cardinality: single
+    temporality: permanent
+  born_in:
+    cardinality: single
+    temporality: permanent
+    aliases: [was_born_in, birthplace]
+  date_of_birth:
+    cardinality: single
+    temporality: permanent
+    aliases: [born_on, birthday]
+
+  # Multi-valued
+  has_hobby:
+    cardinality: multi
+    temporality: unknown
+    aliases: [enjoys, likes_doing]
+  speaks_language:
+    cardinality: multi
+    temporality: unknown
+    aliases: [speaks, knows_language]
+  has_skill:
+    cardinality: multi
+    temporality: unknown
+    aliases: [is_skilled_in, can_do]
+  has_friend:
+    cardinality: multi
+    temporality: unknown
+  has_interest:
+    cardinality: multi
+    temporality: unknown
+    aliases: [is_interested_in]
+  works_on:
+    cardinality: multi
+    temporality: temporal
+
+  # Temporal (single-valued at any point in time)
+  lives_in:
+    cardinality: single
+    temporality: temporal
+    aliases: [resides_in, located_in]
+  works_at:
+    cardinality: single
+    temporality: temporal
+    aliases: [employed_at, works_for]
+  has_job_title:
+    cardinality: single
+    temporality: temporal
+    aliases: [job_title, occupation]
+
+  # Preference (single-valued)
+  prefers:
+    cardinality: single
+    temporality: temporal
+  favorite_color:
+    cardinality: single
+    temporality: unknown
+  favorite_food:
+    cardinality: single
+    temporality: unknown
+
+exclusivity_groups:
+  gender:
+    predicates: [is_male, is_female, is_non_binary]
+    description: "At most one gender identity active"
+  marital_status:
+    predicates: [is_single, is_married, is_divorced, is_widowed]
+    description: "At most one marital status active"

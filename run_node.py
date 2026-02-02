@@ -161,9 +161,12 @@ async def main() -> None:  # pylint: disable=too-many-locals,too-many-statements
 
     if Capability.VALIDATION in capabilities:
         from src.agents.validator import ValidatorAgent
+        from src.schema import load_bootstrap_schema
 
+        schema = load_bootstrap_schema()
         agent = ValidatorAgent(
-            memory=memory, poll_interval=args.poll_interval, state=state
+            memory=memory, poll_interval=args.poll_interval, state=state,
+            schema=schema,
         )
         node.add_event_listener(agent.on_network_event)
         tasks.append(asyncio.create_task(agent.run()))

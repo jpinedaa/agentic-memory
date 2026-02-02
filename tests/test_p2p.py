@@ -296,7 +296,7 @@ class TestMethodCapabilities:
 
     def test_all_memory_api_methods_covered(self):
         expected = {
-            "observe", "claim", "remember", "infer",
+            "observe", "claim", "flag_contradiction", "remember", "infer",
             "get_recent_observations", "get_recent_statements",
             "get_unresolved_contradictions", "get_concepts", "clear",
         }

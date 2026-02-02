@@ -16,6 +16,7 @@ METHOD_CAPABILITIES: dict[str, set[Capability]] = {
     "get_recent_statements": {Capability.STORE},
     "get_unresolved_contradictions": {Capability.STORE},
     "get_concepts": {Capability.STORE},
+    "flag_contradiction": {Capability.STORE},
     "clear": {Capability.STORE},
 }
 

@@ -396,8 +396,8 @@ class PeerNode:
             fn = getattr(memory, method)
             result = await fn(**args)
 
-            # After observe/claim, broadcast event to network
-            if method in ("observe", "claim"):
+            # After observe/claim/flag_contradiction, broadcast event to network
+            if method in ("observe", "claim", "flag_contradiction"):
                 await self._broadcast_event(method, {
                     "id": result,
                     "source": args.get("source", ""),
