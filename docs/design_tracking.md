@@ -619,6 +619,8 @@ memory-system/
 | **Adapter** | Component that translates external input to observations |
 | **Worker Agent** | Continuously running agent that monitors and processes |
 | **Convention** | Agreed-upon meaning for predicates/types; not enforced by DB |
+| **Schema** | Dynamic knowledge about predicates and graph structure (cardinality, temporality, synonymy) that shapes how agents operate. See [schema_agent_design.md](schema_agent_design.md) |
+| **Juxtaposition** | State where two contradicting statements both remain live, awaiting evidence for resolution |
 
 ---
 
@@ -633,7 +635,7 @@ memory-system/
 
 *Document version: 0.7*
 *Last updated: 2026-02-02*
-*Status: v0.3 P2P architecture with UI bridge. Knowledge representation redesigned: proper Neo4j labels (:Concept, :Statement, :Observation, :Source), reified triples, concept decomposition. See knowledge_representation.md.*
+*Status: v0.3 P2P architecture with UI bridge. Knowledge representation redesigned: proper Neo4j labels (:Concept, :Statement, :Observation, :Source), reified triples, concept decomposition. See knowledge_representation.md. Next: dynamic schema layer (schema_agent_design.md) and validator redesign (validation_redesign.md).*
 
 ---
 

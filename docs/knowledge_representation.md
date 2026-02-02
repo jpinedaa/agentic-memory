@@ -270,6 +270,14 @@ RETURN s1, s2
 
 When `claim()` links a new statement to its basis, it uses word-overlap heuristics against recent observations and statements. This is best-effort — it may miss relevant nodes or create false matches. Semantic similarity search (embeddings, vector index) would improve this.
 
+### No predicate schema
+
+Predicates are strings on Statement nodes — the system has no knowledge *about* predicates (cardinality, temporality, synonymy). This means the validator treats all same-subject/same-predicate/different-object pairs as contradictions, even for multi-valued predicates like "has hobby." A dynamic schema layer is being designed to address this. See [Schema Agent Design](schema_agent_design.md).
+
+### Contradiction linking is fragile
+
+The validator detects contradictions by ID but records them via a natural language round-trip through `claim()` → LLM `parse_claim()` → text-based `_find_matching_node()`. This loses the known IDs and is unreliable. Tracked in [Validation Redesign](validation_redesign.md).
+
 ### No concept merging
 
 If observations produce `Concept("my girlfriend")` and `Concept("ami")`, the system does not automatically recognize these as the same person. A concept-merging agent could create `RELATED_TO {relation: "synonym"}` links.
@@ -285,6 +293,8 @@ The quality of concept decomposition and statement extraction depends entirely o
 - [Graph Patterns](graph_patterns.md) — Neo4j graph patterns and visualization
 - [Design Tracking](design_tracking.md) — Full system architecture and data flows
 - [Neo4j Guide](neo4j.md) — Database setup, queries, and troubleshooting
+- [Schema Agent Design](schema_agent_design.md) — Dynamic schema layer
+- [Validation Redesign](validation_redesign.md) — Contradiction detection and lifecycle
 
 ---
 
