@@ -146,6 +146,9 @@ async def main() -> None:  # pylint: disable=too-many-locals,too-many-statements
     memory = P2PMemoryClient(node)
     state = LocalAgentState()
 
+    # Fetch schema for agents (from store node or bootstrap fallback)
+    schema = await _fetch_schema(memory)
+
     # Start agents and/or CLI based on capabilities
     tasks: list[asyncio.Task] = []
 
@@ -153,7 +156,8 @@ async def main() -> None:  # pylint: disable=too-many-locals,too-many-statements
         from src.agents.inference import InferenceAgent
 
         agent = InferenceAgent(
-            memory=memory, poll_interval=args.poll_interval, state=state
+            memory=memory, poll_interval=args.poll_interval, state=state,
+            schema=schema,
         )
         node.add_event_listener(agent.on_network_event)
         tasks.append(asyncio.create_task(agent.run()))
@@ -161,9 +165,7 @@ async def main() -> None:  # pylint: disable=too-many-locals,too-many-statements
 
     if Capability.VALIDATION in capabilities:
         from src.agents.validator import ValidatorAgent
-        from src.schema import load_bootstrap_schema
 
-        schema = load_bootstrap_schema()
         agent = ValidatorAgent(
             memory=memory, poll_interval=args.poll_interval, state=state,
             schema=schema,
@@ -211,6 +213,25 @@ async def main() -> None:  # pylint: disable=too-many-locals,too-many-statements
     os._exit(0)  # noqa: SLF001 — skip executor shutdown (stdin thread can't be cancelled)
 
 
+async def _fetch_schema(memory):
+    """Fetch schema from the store node, falling back to bootstrap."""
+    from src.schema import load_bootstrap_schema
+    from src.schema.loader import PredicateSchema
+
+    try:
+        schema_dict = await memory.get_schema()
+        if schema_dict and schema_dict.get("predicates"):
+            schema = PredicateSchema.from_dict(schema_dict)
+            logger.info("Loaded schema from store node (version %s)", schema_dict.get("schema_version", "?"))
+            return schema
+    except Exception:  # pylint: disable=broad-exception-caught  # schema fetch failure falls back to bootstrap
+        logger.debug("Could not fetch schema from store node, using bootstrap", exc_info=True)
+
+    schema = load_bootstrap_schema()
+    logger.info("Using bootstrap schema")
+    return schema
+
+
 async def _setup_memory_service(
     node: PeerNode, capabilities: set
 ) -> None:
@@ -219,9 +240,12 @@ async def _setup_memory_service(
 
     store = None
     llm = None
+    schema_store = None
 
     if Capability.STORE in capabilities:
         from src.store import StoreConfig, TripleStore
+        from src.schema.store import SchemaStore
+        from pathlib import Path
 
         config = StoreConfig(
             uri=os.environ.get("NEO4J_URI", "bolt://localhost:7687"),
@@ -232,6 +256,13 @@ async def _setup_memory_service(
         store = await TripleStore.connect(config)
         logger.info("Connected to Neo4j")
         node.register_service("store", store)
+
+        # Set up SchemaStore on store nodes
+        schema_path = Path(os.environ.get("SCHEMA_PATH", "data/schema.yaml"))
+        schema_store = SchemaStore(schema_path)
+        await schema_store.load()
+        node.register_service("schema_store", schema_store)
+        logger.info("SchemaStore loaded (version %s)", schema_store.version)
 
     if Capability.LLM in capabilities:
         from src.llm import LLMTranslator
@@ -244,7 +275,9 @@ async def _setup_memory_service(
     if store and llm:
         from src.interfaces import MemoryService
 
-        memory_service = MemoryService(store=store, llm=llm)
+        memory_service = MemoryService(
+            store=store, llm=llm, schema_store=schema_store
+        )
         node.register_service("memory", memory_service)
 
 

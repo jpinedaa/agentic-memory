@@ -16,6 +16,7 @@ class Capability(str, Enum):
     INFERENCE = "inference"
     VALIDATION = "validation"
     CLI = "cli"
+    SCHEMA = "schema"
 
 
 @dataclass(frozen=True)

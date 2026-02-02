@@ -31,10 +31,12 @@ class TestCapability:
         assert Capability.INFERENCE == "inference"
         assert Capability.VALIDATION == "validation"
         assert Capability.CLI == "cli"
+        assert Capability.SCHEMA == "schema"
 
     def test_capability_from_string(self):
         assert Capability("store") == Capability.STORE
         assert Capability("llm") == Capability.LLM
+        assert Capability("schema") == Capability.SCHEMA
 
 
 class TestPeerInfo:
@@ -294,11 +296,18 @@ class TestMethodCapabilities:
     def test_get_recent_observations_needs_only_store(self):
         assert METHOD_CAPABILITIES["get_recent_observations"] == {Capability.STORE}
 
+    def test_get_schema_needs_store(self):
+        assert METHOD_CAPABILITIES["get_schema"] == {Capability.STORE}
+
+    def test_update_schema_needs_store(self):
+        assert METHOD_CAPABILITIES["update_schema"] == {Capability.STORE}
+
     def test_all_memory_api_methods_covered(self):
         expected = {
             "observe", "claim", "flag_contradiction", "remember", "infer",
             "get_recent_observations", "get_recent_statements",
             "get_unresolved_contradictions", "get_concepts", "clear",
+            "get_schema", "update_schema",
         }
         assert set(METHOD_CAPABILITIES.keys()) == expected
 
@@ -543,6 +552,12 @@ class TestP2PMemoryClient:
 
             async def clear(self):
                 pass
+
+            async def get_schema(self):
+                return {"schema_version": 0, "predicates": {}}
+
+            async def update_schema(self, changes, source):
+                return {"schema_version": 1, "predicates": {}}
 
         node.register_service("memory", MockMemory())
         return P2PMemoryClient(node)

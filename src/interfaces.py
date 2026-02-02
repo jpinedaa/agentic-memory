@@ -27,9 +27,15 @@ class MemoryService:
     a single MemoryService instance can serve multiple callers.
     """
 
-    def __init__(self, store: TripleStore, llm: LLMTranslator) -> None:
+    def __init__(
+        self,
+        store: TripleStore,
+        llm: LLMTranslator,
+        schema_store: Any | None = None,
+    ) -> None:
         self.store = store
         self.llm = llm
+        self.schema_store = schema_store
 
     async def observe(self, text: str, source: str) -> str:
         """Record an observation from the external world.
@@ -84,6 +90,12 @@ class MemoryService:
         ]
 
         parsed = await self.llm.parse_claim(text, context)
+
+        # Normalize predicate against schema aliases (e.g. "is_called" → "has_name")
+        if self.schema_store is not None:
+            parsed.predicate = self.schema_store.schema.normalize_predicate(
+                parsed.predicate
+            )
 
         source_id = await self.store.get_or_create_source(source, kind="agent")
 
@@ -220,6 +232,20 @@ class MemoryService:
     async def infer(self, observation_text: str) -> str | None:
         """Use the LLM to produce an inference claim from an observation."""
         return await self.llm.infer(observation_text)
+
+    async def get_schema(self) -> dict[str, Any]:
+        """Return the current schema as a serializable dict."""
+        if self.schema_store is None:
+            return {}
+        return self.schema_store.to_dict()
+
+    async def update_schema(
+        self, changes: dict[str, Any], source: str
+    ) -> dict[str, Any]:
+        """Apply incremental changes to the schema."""
+        if self.schema_store is None:
+            raise RuntimeError("No SchemaStore configured on this node")
+        return self.schema_store.update(changes, source)
 
     async def clear(self) -> None:
         """Clear all data from the graph."""

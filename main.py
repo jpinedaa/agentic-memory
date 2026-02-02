@@ -25,13 +25,15 @@ logger = logging.getLogger(__name__)
 
 async def main() -> None:  # pylint: disable=too-many-locals,too-many-statements  # orchestrates full node setup
     """Run all P2P nodes in-process for dev mode."""
+    from pathlib import Path
     from src.p2p.types import Capability
     from src.p2p.node import PeerNode
     from src.p2p.memory_client import P2PMemoryClient
     from src.p2p.local_state import LocalAgentState
     from src.agents.inference import InferenceAgent
     from src.agents.validator import ValidatorAgent
-    from src.schema import load_bootstrap_schema
+    from src.schema.store import SchemaStore
+    from src.schema.loader import PredicateSchema
     from src.cli import run_cli
     from src.interfaces import MemoryService
     from src.llm import LLMTranslator
@@ -51,7 +53,14 @@ async def main() -> None:  # pylint: disable=too-many-locals,too-many-statements
     logger.info("Connected to Neo4j")
 
     llm = LLMTranslator(api_key=anthropic_key, model=llm_model)
-    memory_service = MemoryService(store=store, llm=llm)
+
+    # Set up SchemaStore
+    schema_path = Path(os.environ.get("SCHEMA_PATH", "data/schema.yaml"))
+    schema_store = SchemaStore(schema_path)
+    await schema_store.load()
+    logger.info("SchemaStore loaded (version %s)", schema_store.version)
+
+    memory_service = MemoryService(store=store, llm=llm, schema_store=schema_store)
 
     store_node = PeerNode(
         capabilities={Capability.STORE, Capability.LLM},
@@ -62,10 +71,14 @@ async def main() -> None:  # pylint: disable=too-many-locals,too-many-statements
     store_node.register_service("memory", memory_service)
     store_node.register_service("store", store)
     store_node.register_service("llm", llm)
+    store_node.register_service("schema_store", schema_store)
     store_node.transport_server.mount_ui_bridge(store)
     await store_node.start()
 
     bootstrap = ["http://127.0.0.1:9000"]
+
+    # Fetch schema for agents (from store node)
+    schema = schema_store.schema
 
     # ── Inference node ──────────────────────────────────────────────
     inference_node = PeerNode(
@@ -80,7 +93,8 @@ async def main() -> None:  # pylint: disable=too-many-locals,too-many-statements
     inference_memory = P2PMemoryClient(inference_node)
     state = LocalAgentState()
     inference_agent = InferenceAgent(
-        memory=inference_memory, poll_interval=5.0, state=state
+        memory=inference_memory, poll_interval=5.0, state=state,
+        schema=schema,
     )
     inference_node.add_event_listener(inference_agent.on_network_event)
 
@@ -96,7 +110,6 @@ async def main() -> None:  # pylint: disable=too-many-locals,too-many-statements
 
     validator_memory = P2PMemoryClient(validator_node)
     validator_state = LocalAgentState()
-    schema = load_bootstrap_schema()
     validator_agent = ValidatorAgent(
         memory=validator_memory, poll_interval=8.0, state=validator_state,
         schema=schema,

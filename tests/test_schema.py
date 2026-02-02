@@ -116,3 +116,94 @@ class TestGetInfo:
         info = schema.get_info("lives_in")
         assert info is not None
         assert info.temporality == "temporal"
+
+    def test_provenance_defaults(self, schema):
+        info = schema.get_info("has_name")
+        assert info is not None
+        assert info.origin == "bootstrap"
+        assert info.reasoning is None
+        assert info.last_reviewed is None
+
+
+class TestSerialization:
+
+    def test_round_trip(self, schema):
+        data = schema.to_dict()
+        restored = PredicateSchema.from_dict(data)
+        assert restored.known_predicates() == schema.known_predicates()
+        assert restored.is_multi_valued("has_hobby") is True
+        assert restored.is_single_valued("has_name") is True
+        assert restored.normalize_predicate("is_called") == "has_name"
+
+    def test_round_trip_preserves_exclusivity_groups(self, schema):
+        data = schema.to_dict()
+        restored = PredicateSchema.from_dict(data)
+        group = restored.get_exclusivity_group("is_male")
+        assert group is not None
+        assert group.name == "gender"
+        assert "is_female" in group.predicates
+
+    def test_from_dict_bootstrap_format(self):
+        """from_dict accepts dicts without provenance fields."""
+        data = {
+            "defaults": {"cardinality": "single", "temporality": "unknown"},
+            "predicates": {
+                "has_name": {
+                    "cardinality": "single",
+                    "temporality": "permanent",
+                    "aliases": ["is_called"],
+                },
+            },
+            "exclusivity_groups": {},
+        }
+        schema = PredicateSchema.from_dict(data)
+        info = schema.get_info("has_name")
+        assert info is not None
+        assert info.origin == "bootstrap"
+        assert info.reasoning is None
+        assert schema.normalize_predicate("is_called") == "has_name"
+
+    def test_from_dict_dynamic_format(self):
+        """from_dict preserves provenance fields."""
+        data = {
+            "predicates": {
+                "mentors": {
+                    "cardinality": "multi",
+                    "temporality": "unknown",
+                    "origin": "learned",
+                    "reasoning": "Observed multiple mentoring relationships",
+                    "last_reviewed": "2026-02-02T14:30:00Z",
+                },
+            },
+        }
+        schema = PredicateSchema.from_dict(data)
+        info = schema.get_info("mentors")
+        assert info is not None
+        assert info.cardinality == "multi"
+        assert info.origin == "learned"
+        assert info.reasoning == "Observed multiple mentoring relationships"
+        assert info.last_reviewed == "2026-02-02T14:30:00Z"
+
+    def test_to_dict_omits_default_provenance(self, schema):
+        """to_dict omits origin/reasoning when they are defaults."""
+        data = schema.to_dict()
+        # Bootstrap predicates should not have origin key (it's the default)
+        assert "origin" not in data["predicates"]["has_name"]
+        assert "reasoning" not in data["predicates"]["has_name"]
+
+    def test_to_dict_includes_learned_provenance(self):
+        """to_dict includes origin/reasoning for learned predicates."""
+        data = {
+            "predicates": {
+                "mentors": {
+                    "cardinality": "multi",
+                    "temporality": "unknown",
+                    "origin": "learned",
+                    "reasoning": "Multi-valued by nature",
+                },
+            },
+        }
+        schema = PredicateSchema.from_dict(data)
+        exported = schema.to_dict()
+        assert exported["predicates"]["mentors"]["origin"] == "learned"
+        assert exported["predicates"]["mentors"]["reasoning"] == "Multi-valued by nature"

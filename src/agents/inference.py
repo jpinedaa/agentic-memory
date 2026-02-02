@@ -9,13 +9,14 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING
+from typing import Any, TYPE_CHECKING
 
 from src.agents.base import WorkerAgent
 
 if TYPE_CHECKING:
     from src.p2p.local_state import LocalAgentState
     from src.memory_protocol import MemoryAPI
+    from src.schema.loader import PredicateSchema
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +31,7 @@ class InferenceAgent(WorkerAgent):
         memory: MemoryAPI,
         poll_interval: float = 30.0,
         state: LocalAgentState | None = None,
+        schema: PredicateSchema | None = None,
     ) -> None:
         super().__init__(
             source_id="inference_agent",
@@ -39,9 +41,24 @@ class InferenceAgent(WorkerAgent):
             agent_type="inference",
         )
         self._inference_started_at = datetime.now(timezone.utc).isoformat()
+        self._schema = schema
 
     def event_types(self) -> list[str]:
-        return ["observe"]
+        return ["observe", "schema_updated"]
+
+    async def on_network_event(self, event_type: str, data: dict[str, Any]) -> None:
+        """Handle network events, including schema hot-reload."""
+        if event_type == "schema_updated":
+            schema_dict = data.get("schema")
+            if schema_dict:
+                from src.schema.loader import PredicateSchema
+                self._schema = PredicateSchema.from_dict(schema_dict)
+                logger.info(
+                    "Schema hot-reloaded to version %s",
+                    data.get("version"),
+                )
+        if event_type in self.event_types():
+            self._event_received.set()
 
     async def process(self) -> list[str]:
         """Check for unprocessed observations and infer claims."""

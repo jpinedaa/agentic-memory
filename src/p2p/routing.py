@@ -18,6 +18,8 @@ METHOD_CAPABILITIES: dict[str, set[Capability]] = {
     "get_concepts": {Capability.STORE},
     "flag_contradiction": {Capability.STORE},
     "clear": {Capability.STORE},
+    "get_schema": {Capability.STORE},
+    "update_schema": {Capability.STORE},
 }
 
 

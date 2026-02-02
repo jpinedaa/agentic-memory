@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 STATUS_MAP = {"alive": "running", "suspect": "stale", "dead": "dead"}
 
 # Priority order for picking "agent_type" from capabilities
-CAPABILITY_PRIORITY = ["cli", "inference", "validation", "store", "llm"]
+CAPABILITY_PRIORITY = ["cli", "inference", "validation", "schema", "store", "llm"]
 
 
 def _peer_to_agent(peer_state) -> dict[str, Any]:
@@ -82,7 +82,7 @@ def create_ui_bridge(node: PeerNode, store: TripleStore) -> APIRouter:
 
     async def _on_network_event(event_type: str, data: dict[str, Any]) -> None:
         """Forward P2P memory events to UI clients."""
-        event_map = {"observe": "observation", "claim": "claim"}
+        event_map = {"observe": "observation", "claim": "claim", "schema_updated": "schema_updated"}
         await _broadcast_to_ui({
             "type": "memory_event",
             "data": {
@@ -252,6 +252,15 @@ def create_ui_bridge(node: PeerNode, store: TripleStore) -> APIRouter:
                 "MATCH (n:Source) RETURN count(n) AS c"
             )
 
+            # Schema info (if available)
+            schema_info = {}
+            schema_store = node.get_service("schema_store")
+            if schema_store:
+                schema_info = {
+                    "version": schema_store.version,
+                    "predicate_count": len(schema_store.schema._predicates),
+                }
+
             return {
                 "network": {
                     "total_nodes": len(all_peers),
@@ -268,6 +277,7 @@ def create_ui_bridge(node: PeerNode, store: TripleStore) -> APIRouter:
                     "sources": source_count[0]["c"] if source_count else 0,
                     "relationships": rel_count[0]["c"] if rel_count else 0,
                 },
+                "schema": schema_info,
                 "nodes": nodes_by_type,
                 "total_agents": len(all_peers),
                 "active_agents": alive_count,

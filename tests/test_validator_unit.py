@@ -1,10 +1,11 @@
-"""Unit tests for ValidatorAgent with schema-aware contradiction detection."""
+"""Unit tests for ValidatorAgent and InferenceAgent with schema-aware features."""
 
 import pytest
 from unittest.mock import AsyncMock
 
 from src.agents.validator import ValidatorAgent
-from src.schema import load_bootstrap_schema
+from src.agents.inference import InferenceAgent
+from src.schema import load_bootstrap_schema, PredicateSchema
 
 
 @pytest.fixture
@@ -226,3 +227,77 @@ class TestReturnValue:
         result = await agent.process()
         assert result == []
         mock_memory.flag_contradiction.assert_not_called()
+
+
+class TestValidatorHotReload:
+
+    def test_event_types_includes_schema_updated(self, mock_memory):
+        agent = ValidatorAgent(memory=mock_memory)
+        assert "schema_updated" in agent.event_types()
+        assert "claim" in agent.event_types()
+
+    @pytest.mark.asyncio
+    async def test_on_network_event_swaps_schema(self, mock_memory):
+        schema = load_bootstrap_schema()
+        agent = ValidatorAgent(memory=mock_memory, schema=schema)
+        assert agent._schema is schema
+
+        new_schema_dict = schema.to_dict()
+        new_schema_dict["predicates"]["new_pred"] = {
+            "cardinality": "single",
+            "temporality": "permanent",
+        }
+        await agent.on_network_event("schema_updated", {
+            "schema": new_schema_dict,
+            "version": 1,
+        })
+        assert agent._schema is not schema
+        assert agent._schema.get_info("new_pred") is not None
+
+    @pytest.mark.asyncio
+    async def test_on_network_event_ignores_missing_schema(self, mock_memory):
+        schema = load_bootstrap_schema()
+        agent = ValidatorAgent(memory=mock_memory, schema=schema)
+        await agent.on_network_event("schema_updated", {})
+        assert agent._schema is schema  # unchanged
+
+
+class TestInferenceAgent:
+
+    def test_accepts_schema_param(self, mock_memory):
+        schema = load_bootstrap_schema()
+        agent = InferenceAgent(memory=mock_memory, schema=schema)
+        assert agent._schema is schema
+
+    def test_schema_defaults_to_none(self, mock_memory):
+        agent = InferenceAgent(memory=mock_memory)
+        assert agent._schema is None
+
+    def test_event_types_includes_schema_updated(self, mock_memory):
+        agent = InferenceAgent(memory=mock_memory)
+        assert "schema_updated" in agent.event_types()
+        assert "observe" in agent.event_types()
+
+    @pytest.mark.asyncio
+    async def test_on_network_event_swaps_schema(self, mock_memory):
+        schema = load_bootstrap_schema()
+        agent = InferenceAgent(memory=mock_memory, schema=schema)
+
+        new_schema_dict = schema.to_dict()
+        new_schema_dict["predicates"]["inferred_pred"] = {
+            "cardinality": "multi",
+            "temporality": "temporal",
+        }
+        await agent.on_network_event("schema_updated", {
+            "schema": new_schema_dict,
+            "version": 2,
+        })
+        assert agent._schema is not schema
+        assert agent._schema.get_info("inferred_pred") is not None
+
+    @pytest.mark.asyncio
+    async def test_on_network_event_ignores_missing_schema(self, mock_memory):
+        schema = load_bootstrap_schema()
+        agent = InferenceAgent(memory=mock_memory, schema=schema)
+        await agent.on_network_event("schema_updated", {})
+        assert agent._schema is schema

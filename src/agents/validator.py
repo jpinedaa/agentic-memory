@@ -9,7 +9,7 @@ multi-valued predicates and checks exclusivity groups.
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
+from typing import Any, TYPE_CHECKING
 
 from src.agents.base import WorkerAgent
 
@@ -43,7 +43,21 @@ class ValidatorAgent(WorkerAgent):
         self._schema = schema
 
     def event_types(self) -> list[str]:
-        return ["claim"]
+        return ["claim", "schema_updated"]
+
+    async def on_network_event(self, event_type: str, data: dict[str, Any]) -> None:
+        """Handle network events, including schema hot-reload."""
+        if event_type == "schema_updated":
+            schema_dict = data.get("schema")
+            if schema_dict:
+                from src.schema.loader import PredicateSchema
+                self._schema = PredicateSchema.from_dict(schema_dict)
+                logger.info(
+                    "Schema hot-reloaded to version %s",
+                    data.get("version"),
+                )
+        if event_type in self.event_types():
+            self._event_received.set()
 
     async def process(self) -> list[str]:  # pylint: disable=too-many-locals
         """Check for contradicting statements and flag them.

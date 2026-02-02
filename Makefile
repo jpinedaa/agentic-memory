@@ -42,6 +42,9 @@ dev-validator: ## Run a validator node locally (bootstrap to localhost:9000)
 dev-cli: ## Run a CLI node locally (bootstrap to localhost:9000)
 	.venv/bin/python run_node.py --capabilities cli --port 9003 --bootstrap http://localhost:9000
 
+dev-schema: ## Run a schema node locally (bootstrap to localhost:9000)
+	.venv/bin/python run_node.py --capabilities schema --port 9004 --bootstrap http://localhost:9000
+
 # ── Debug ──────────────────────────────────────────────────────────
 
 debug-agents: ## Run full stack with DEBUG logging for agents, LLM, and prompts
@@ -82,7 +85,7 @@ test-all: ## Start Neo4j, then run all tests (still needs API key for LLM tests)
 	.venv/bin/python -m pytest tests/ -v
 
 test-unit: ## Run only unit tests (no Neo4j, no API key needed)
-	.venv/bin/python -m pytest tests/test_p2p.py tests/test_prompts.py -v
+	.venv/bin/python -m pytest tests/test_p2p.py tests/test_prompts.py tests/test_schema.py tests/test_schema_store.py tests/test_validator_unit.py -v
 
 test-e2e: ## Run end-to-end tests in Docker (full stack)
 	docker compose -f docker-compose.yml -f docker-compose.test.yml up --build --abort-on-container-exit --exit-code-from test-runner

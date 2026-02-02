@@ -70,6 +70,18 @@ class P2PMemoryClient:
         """Return all concepts via P2P routing."""
         return await self._call("get_concepts", {})
 
+    async def get_schema(self) -> dict[str, Any]:
+        """Return the current schema via P2P routing."""
+        return await self._call("get_schema", {})
+
+    async def update_schema(
+        self, changes: dict[str, Any], source: str
+    ) -> dict[str, Any]:
+        """Apply incremental schema changes via P2P routing."""
+        return await self._call(
+            "update_schema", {"changes": changes, "source": source}
+        )
+
     async def clear(self) -> None:
         """Clear all data via P2P routing."""
         await self._call("clear", {})

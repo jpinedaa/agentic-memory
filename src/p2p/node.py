@@ -404,6 +404,10 @@ class PeerNode:
                     "text": args.get("text", ""),
                 })
 
+            # After schema update, broadcast with higher TTL
+            if method == "update_schema":
+                await self._broadcast_schema_event(result)
+
             return Envelope(
                 msg_type="response",
                 sender_id=self.node_id,
@@ -472,6 +476,34 @@ class PeerNode:
         )
         msg = envelope.to_dict()
         # Mark as seen so we don't re-process our own broadcast
+        self._seen_msgs[envelope.msg_id] = None
+        await self.transport_client.broadcast_ws(msg)
+        await self.transport_server.broadcast_inbound(msg)
+
+    async def _broadcast_schema_event(self, schema_dict: dict[str, Any]) -> None:
+        """Broadcast a schema_updated event with higher TTL for wider reach."""
+        for listener in self._event_listeners:
+            try:
+                await listener("schema_updated", {
+                    "schema": schema_dict,
+                    "version": schema_dict.get("schema_version"),
+                })
+            except Exception:  # pylint: disable=broad-exception-caught
+                logger.debug("Error in schema event listener", exc_info=True)
+
+        envelope = Envelope(
+            msg_type="event",
+            sender_id=self.node_id,
+            ttl=5,  # higher TTL than domain events (default 3)
+            payload={
+                "event_type": "schema_updated",
+                "data": {
+                    "schema": schema_dict,
+                    "version": schema_dict.get("schema_version"),
+                },
+            },
+        )
+        msg = envelope.to_dict()
         self._seen_msgs[envelope.msg_id] = None
         await self.transport_client.broadcast_ws(msg)
         await self.transport_server.broadcast_inbound(msg)

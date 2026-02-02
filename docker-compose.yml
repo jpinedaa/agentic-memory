@@ -27,6 +27,9 @@ services:
       LLM_MODEL: ${LLM_MODEL:-claude-sonnet-4-20250514}
       LOG_CONFIG: ${LOG_CONFIG:-logging.json}
       ADVERTISE_HOST: store-node
+      SCHEMA_PATH: /app/data/schema.yaml
+    volumes:
+      - schema_data:/app/data
     depends_on:
       neo4j:
         condition: service_healthy
@@ -84,3 +87,4 @@ services:
 
 volumes:
   neo4j_data:
+  schema_data:

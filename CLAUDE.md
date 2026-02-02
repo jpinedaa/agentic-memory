@@ -106,6 +106,7 @@ pytest                            # all tests (needs Neo4j + API key)
 | `ADVERTISE_HOST` | (listen host) | Hostname other nodes use to reach this node (for Docker/k8s) |
 | `LOG_CONFIG` | `logging.json` | Path to JSON logging dictConfig file |
 | `POLL_INTERVAL` | `30` | Agent poll fallback interval (seconds) |
+| `SCHEMA_PATH` | `data/schema.yaml` | Path to persistent schema file (store node) |
 
 ## Architecture
 
@@ -129,7 +130,8 @@ src/cli.py               → stdin/stdout chat adapter
 src/agents/base.py       → WorkerAgent ABC (event-driven + poll fallback)
 src/agents/inference.py  → observations → claims
 src/agents/validator.py  → schema-aware contradiction detection
-src/schema/              → bootstrap predicate schema (YAML + loader)
+src/schema/              → predicate schema (YAML bootstrap + loader + persistent store)
+src/schema/store.py      → SchemaStore (persistent schema manager on store node)
 main.py                  → dev mode (in-process, multiple P2P nodes)
 run_node.py              → unified distributed node entry point
 ui/                      → React + D3.js dashboard (separate container, port 3000)
@@ -211,6 +213,7 @@ Never run Python commands directly without the venv activated.
 | `llm` | Claude API (infer, parse claims) | Anthropic API key |
 | `inference` | InferenceAgent logic | Needs `store`+`llm` peer |
 | `validation` | ValidatorAgent logic | Needs `store` peer |
+| `schema` | Schema evolution agent | Needs `store`+`llm` peer |
 | `cli` | Interactive user I/O | Needs `store`+`llm` peer |
 
 ### Communication
