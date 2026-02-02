@@ -31,6 +31,7 @@ import argparse
 import asyncio
 import logging
 import os
+import signal
 from typing import TYPE_CHECKING
 
 from dotenv import load_dotenv
@@ -174,14 +175,26 @@ async def main() -> None:  # pylint: disable=too-many-locals,too-many-statements
         tasks.append(asyncio.create_task(run_cli(memory)))
         logger.info("Started CLI")
 
+    # Set up signal handling for clean shutdown
+    shutdown_event = asyncio.Event()
+    loop = asyncio.get_running_loop()
+
+    def _signal_handler() -> None:
+        if shutdown_event.is_set():
+            # Second signal — force exit (stdin.readline thread blocks executor shutdown)
+            logger.info("Forced shutdown")
+            os._exit(0)  # noqa: SLF001 — intentional force-exit to avoid executor hang
+        shutdown_event.set()
+        for t in tasks:
+            t.cancel()
+
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        loop.add_signal_handler(sig, _signal_handler)
+
     if not tasks:
         # Pure service node (store/llm only) — just keep running
         logger.info("Running as service node (no agent/CLI)")
-        try:
-            while True:
-                await asyncio.sleep(3600)
-        except (KeyboardInterrupt, asyncio.CancelledError):
-            pass
+        await shutdown_event.wait()
     else:
         try:
             await asyncio.gather(*tasks)
@@ -192,6 +205,7 @@ async def main() -> None:  # pylint: disable=too-many-locals,too-many-statements
     await node.stop()
     await state.close()
     logger.info("Node shutdown complete")
+    os._exit(0)  # noqa: SLF001 — skip executor shutdown (stdin thread can't be cancelled)
 
 
 async def _setup_memory_service(
