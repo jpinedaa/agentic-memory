@@ -263,3 +263,36 @@ Features:
 - **Jinja2**: `{% if include_reasoning %}...{% endif %}` for conditionals
 - **Pydantic**: Type-checked variables (`InferenceVars`, `ClaimVars`, etc.)
 - **Versioning**: Each prompt has `version` metadata
+
+## GitHub
+
+**Repo**: `jpinedaa/agentic-memory` (remote: `origin`)
+
+### Issue Labels
+
+| Label | Color | Usage |
+|-------|-------|-------|
+| `bug` | red | Something isn't working |
+| `enhancement` | teal | New feature or request |
+| `documentation` | blue | Docs improvements |
+| `good first issue` | purple | Good for newcomers |
+| `help wanted` | green | Extra attention needed |
+| `question` | violet | Needs more information |
+| `duplicate` | gray | Already exists |
+| `invalid` | yellow | Doesn't seem right |
+| `wontfix` | white | Will not be worked on |
+
+### Issue Conventions
+
+- Title: short imperative description of the problem or feature
+- Body: structured with `## Summary`, root cause analysis, `## Files Involved` table, `## Reproduction` steps
+- Include code snippets with file paths and line numbers for AI-parseable context
+- Always assign at least one label (`bug`, `enhancement`, or `documentation`)
+- Use `gh issue create --label <label> --title <title> --body <body>` via CLI
+
+### Branch & PR Conventions
+
+- Feature branches: `feature/<short-name>`
+- Bug fix branches: `fix/<short-name>`
+- Design branches: `<design-topic>-design` (e.g., `schema-evolution-design`)
+- PRs target the main branch unless otherwise specified
