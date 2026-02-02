@@ -180,6 +180,20 @@ Never run Python commands directly without the venv activated.
 
 ---
 
+### Pipeline Ownership
+
+| Concern | Owner | Method |
+|---------|-------|--------|
+| Raw recording | `observe()` | Creates Observation + Concept nodes only. Does NOT create Statements. |
+| Statement creation | Inference agent | Calls `claim()` to create Statements from observations. |
+| Contradiction detection | Validator agent | Calls `flag_contradiction(stmt_id_1, stmt_id_2, reason)` with exact IDs. Schema-aware via bootstrap `PredicateSchema`. |
+| Resolution (supersession) | `claim()` | Uses `supersedes_description` for SUPERSEDES links. |
+
+- `claim()` does NOT create CONTRADICTS links. The `contradicts_description` field was removed from ClaimData and the LLM tool schema.
+- The validator loads the bootstrap schema (`src/schema/bootstrap.yaml`) and skips multi-valued predicates. Unknown predicates default to single-valued.
+
+### General Rules
+
 - Do not worry about backward compatibility unless explicitly stated. When making updates, also update relevant code, design docs (`docs/design_tracking.md`), and tests.
 - All external access goes through the `MemoryAPI` protocol. Never access `.store` or `.llm` directly from agents or CLI.
 - Agents receive `P2PMemoryClient` as their `memory` parameter. Use the protocol, not concrete types.
@@ -215,7 +229,7 @@ Never run Python commands directly without the venv activated.
 | `join` / `welcome` | Bootstrap discovery |
 | `gossip` | Peer state propagation |
 | `request` / `response` | MemoryAPI RPC |
-| `event` | Observation/claim broadcast |
+| `event` | Observation/claim/contradiction broadcast |
 | `ping` / `pong` | Liveness |
 | `leave` | Graceful shutdown |
 
