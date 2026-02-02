@@ -13,9 +13,9 @@ METHOD_CAPABILITIES: dict[str, set[Capability]] = {
     "remember": {Capability.STORE, Capability.LLM},
     "infer": {Capability.LLM},
     "get_recent_observations": {Capability.STORE},
-    "get_recent_claims": {Capability.STORE},
+    "get_recent_statements": {Capability.STORE},
     "get_unresolved_contradictions": {Capability.STORE},
-    "get_entities": {Capability.STORE},
+    "get_concepts": {Capability.STORE},
     "clear": {Capability.STORE},
 }
 

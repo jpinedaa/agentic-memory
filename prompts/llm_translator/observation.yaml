@@ -1,6 +1,6 @@
 name: observation_extraction
-version: "1.0"
-description: Extract structured entities and relationships from observation text
+version: "2.0"
+description: Extract structured concepts and statements from observation text
 extends: shared/base
 
 system: |
@@ -8,9 +8,15 @@ system: |
 
   Rules:
   {{ constraints }}
-  - Predicates should be simple verbs or verb phrases
-  - Keep objects concise
-  - Extract ALL meaningful relationships from the text
+  - Extract ALL concepts mentioned (people, things, ideas, values, categories)
+  - Concept names should be lowercase (unless proper nouns)
+  - Decompose compound concepts into components. For example:
+    "peer-to-peer network" → components: [{name: "network", relation: "is_a"}, {name: "peer-to-peer", relation: "has_property"}]
+    "morning meetings" → components: [{name: "meetings", relation: "head_noun"}, {name: "morning", relation: "modifier"}]
+  - Predicates should be simple verbs or verb phrases (e.g. "is", "prefers", "works at")
+  - Each statement's subject and object must match a concept name
+  - Set confidence based on directness: stated facts = 0.9-1.0, implied = 0.6-0.8
+  - Use negated=true for negative statements (e.g. "does NOT like")
 
 variables:
   observation_text:

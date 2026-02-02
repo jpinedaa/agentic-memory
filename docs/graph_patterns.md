@@ -8,101 +8,76 @@ For the full knowledge representation model (node types, relationship types, des
 
 ## 1. Observation Pattern
 
-**Purpose**: `observe()` records raw input and builds entity graph structure. No Claim nodes are created — claims are exclusively the inference agent's job.
+**Purpose**: `observe()` records raw input, extracts concepts with decomposition, and creates reified statements. Source provenance is tracked as a first-class node.
 
 **Structure**:
 
 ```
-(Observation)
-     │
-     ├──SUBJECT──▶ (Entity: name=subject)
-     │                    │
-     │                    └──PREDICATE──▶ (Entity: name=object)
-```
-
-**Example**:
-
-Input: `"my girlfriend name is ami"`
-
-```
-(Observation)
-  id: 5e4d...
-  raw_content: "my girlfriend name is ami"
-  source: "cli_user"
-  type: "Observation"
+(:Source {name: "cli_user", kind: "user"})
+      ▲
+      │ RECORDED_BY
+(:Observation {raw_content: "..."})
       │
-      ├──SUBJECT──▶ (Entity: "my girlfriend") ──IS_NAMED──▶ (Entity: "ami")
-      ├──SUBJECT──▶ (Entity: "ami")
+      ├──MENTIONS──▶ (:Concept {name: "bitcoin", kind: "entity"})
+      ├──MENTIONS──▶ (:Concept {name: "peer-to-peer network", kind: "category"})
+      │                    ├──RELATED_TO {relation: "is_a"}──▶ (:Concept {name: "network"})
+      │                    └──RELATED_TO {relation: "has_property"}──▶ (:Concept {name: "peer-to-peer"})
+      │
+      └──(linked from Statement via DERIVED_FROM)
+
+(:Statement {predicate: "is", confidence: 1.0})
+      ├──ABOUT_SUBJECT──▶ (:Concept {name: "bitcoin"})
+      ├──ABOUT_OBJECT──▶ (:Concept {name: "peer-to-peer network"})
+      ├──DERIVED_FROM──▶ (:Observation above)
+      └──ASSERTED_BY──▶ (:Source {name: "cli_user"})
 ```
 
 **What happens**:
 
-1. Observation node stores the raw text
-2. Entity nodes are created/reused for each mentioned entity
-3. Observation links to entities via SUBJECT
-4. Entity-to-entity edges are created from extracted triples (the knowledge graph)
-
-**What does NOT happen**:
-
-- No Claim nodes are created
-- No BASIS links from this path
-- No confidence scores at this stage
+1. Source node created/reused via `get_or_create_source()`
+2. Observation node stores the raw text
+3. Concept nodes are created/reused for each extracted concept
+4. Observation links to concepts via MENTIONS
+5. Compound concepts are decomposed via RELATED_TO edges
+6. Statement nodes (reified triples) are created with ABOUT_SUBJECT/ABOUT_OBJECT/DERIVED_FROM/ASSERTED_BY
 
 **Code references**:
 
 - **Creation**: `src/interfaces.py` → `MemoryService.observe()`
 - **LLM extraction**: `src/llm.py` → `LLMTranslator.extract_observation()`
-- **Storage**: `src/store.py` → `TripleStore.create_node()`, `create_relationship()`
+- **Storage**: `src/store.py` → `create_observation()`, `create_concept()`, `create_statement()`, `create_relationship()`
 
 **Cypher queries**:
 
 ```cypher
--- Find entity-to-entity relationships (the knowledge graph)
-MATCH (a:Node {type: 'Entity'})-[r]->(b:Node {type: 'Entity'})
-RETURN a.name, type(r), b.name
+-- All statements derived from observations (the knowledge extracted by observe())
+MATCH (s:Statement)-[:DERIVED_FROM]->(o:Observation)
+OPTIONAL MATCH (s)-[:ABOUT_SUBJECT]->(subj:Concept)
+OPTIONAL MATCH (s)-[:ABOUT_OBJECT]->(obj:Concept)
+RETURN subj.name, s.predicate, obj.name, s.confidence, o.raw_content
 
--- Find which observations mention an entity
-MATCH (obs:Node {type: 'Observation'})-[:SUBJECT]->(e:Node {type: 'Entity'})
-RETURN obs.raw_content, e.name, obs.timestamp
-ORDER BY obs.timestamp DESC
+-- Concept decomposition
+MATCH (c:Concept)-[r:RELATED_TO]->(sub:Concept)
+RETURN c.name, r.relation, sub.name
 ```
 
 ---
 
 ## 2. Claim Pattern
 
-**Purpose**: `claim()` records agent assertions with confidence scores and evidential links. Only agents create claims — never `observe()`.
+**Purpose**: `claim()` records agent assertions as Statement nodes with confidence, provenance, and optional contradiction/supersession links.
 
 **Structure**:
 
 ```
-(Claim)
-  subject_text: string
-  predicate_text: string
-  object_text: string
-  confidence: float (0.0-1.0)
-  source: string (agent name)
+(:Statement {predicate: "prefers", confidence: 0.85, negated: false})
      │
-     ├──SUBJECT──▶ (Entity: name=subject)
-     ├──BASIS──▶ (Observation or Claim)
-     ├──CONTRADICTS──▶ (Claim)          [if applicable]
-     └──SUPERSEDES──▶ (Claim)           [if Resolution]
-```
-
-**Example**:
-
-After the inference agent processes the observation `"my girlfriend name is ami"`:
-
-```
-(Claim)
-  subject_text: "user"
-  predicate_text: "has girlfriend named"
-  object_text: "ami"
-  confidence: 0.9
-  source: "inference_agent"
-     │
-     ├──SUBJECT──▶ (Entity: "user")
-     └──BASIS──▶ (Observation: "my girlfriend name is ami")
+     ├──ABOUT_SUBJECT──▶ (:Concept {name: "user"})
+     ├──ABOUT_OBJECT──▶ (:Concept {name: "afternoon meetings"})
+     ├──ASSERTED_BY──▶ (:Source {name: "inference_agent", kind: "agent"})
+     ├──DERIVED_FROM──▶ (:Observation or :Statement)    [basis]
+     ├──CONTRADICTS──▶ (:Statement)                     [if applicable]
+     └──SUPERSEDES──▶ (:Statement)                      [if resolution]
 ```
 
 **Code references**:
@@ -114,21 +89,20 @@ After the inference agent processes the observation `"my girlfriend name is ami"
 **Cypher queries**:
 
 ```cypher
--- All claims with their basis
-MATCH (c:Node {type: 'Claim'})-[:BASIS]->(basis)
-RETURN c.subject_text, c.predicate_text, c.object_text,
-       c.confidence, basis.type, basis.raw_content
+-- All statements with their basis
+MATCH (s:Statement)-[:DERIVED_FROM]->(basis)
+OPTIONAL MATCH (s)-[:ABOUT_SUBJECT]->(subj:Concept)
+OPTIONAL MATCH (s)-[:ABOUT_OBJECT]->(obj:Concept)
+RETURN subj.name, s.predicate, obj.name, s.confidence, labels(basis)[0] AS basis_type
 
--- Trace a claim back to its source observation
-MATCH (claim:Node {id: $claim_id})-[:BASIS]->(obs:Node {type: 'Observation'})
-RETURN obs.raw_content, obs.source, obs.timestamp
-
--- Claims about an entity (excluding superseded)
-MATCH (c:Node)-[:SUBJECT]->(e:Node {type: 'Entity'})
-WHERE c.type IN ['Claim', 'Resolution']
-AND NOT EXISTS { MATCH (newer:Node)-[:SUPERSEDES]->(c) }
-RETURN c.subject_text, c.predicate_text, c.object_text, c.confidence
-ORDER BY c.confidence DESC, c.timestamp DESC
+-- Statements about a concept (excluding superseded)
+MATCH (s:Statement)-[:ABOUT_SUBJECT|ABOUT_OBJECT]->(c:Concept)
+WHERE toLower(c.name) = 'user'
+AND NOT EXISTS { MATCH (:Statement)-[:SUPERSEDES]->(s) }
+OPTIONAL MATCH (s)-[:ABOUT_SUBJECT]->(subj:Concept)
+OPTIONAL MATCH (s)-[:ABOUT_OBJECT]->(obj:Concept)
+RETURN subj.name, s.predicate, obj.name, s.confidence
+ORDER BY s.confidence DESC, s.created_at DESC
 ```
 
 ---
@@ -156,34 +130,32 @@ Each node builds its own view of the network from gossip messages. Higher `heart
 - `src/p2p/routing.py` → `RoutingTable` (peer tracking + capability routing)
 - `src/p2p/node.py` → `PeerNode` (health check loop, neighbor management)
 
-See `docs/agent_status_pattern.md` for full design.
-
 ---
 
-## 3. UI Visualization
+## 4. UI Visualization
 
-The knowledge graph is rendered in the React UI's GraphView panel using D3.js. Node types are color-coded:
+The knowledge graph is rendered in the React UI's GraphView panel using D3.js. Node types are color-coded by Neo4j label:
 
-| Node Type | Color | D3 Radius |
+| Node Label | Color | D3 Radius |
 |-----------|-------|-----------|
-| Entity | Blue (`#58a6ff`) | 12 |
+| Concept | Blue (`#58a6ff`) | 12 |
 | Observation | Gray (`#8b949e`) | 8 |
-| Claim | Green (`#3fb950`) | 10 |
-| Resolution | Purple (`#a371f7`) | 10 |
+| Statement | Green (`#3fb950`) | 10 |
+| Source | Purple (`#a371f7`) | 10 |
 
-Entity-to-entity edges show the predicate as labels (e.g. `IS_NAMED`, `PREFERS`). System edges (`SUBJECT`, `BASIS`, `SUPERSEDES`, `CONTRADICTS`) are also visible.
+Relationships (`ABOUT_SUBJECT`, `ABOUT_OBJECT`, `DERIVED_FROM`, `MENTIONS`, `RELATED_TO`, etc.) are visible as graph edges.
 
-The SVG element is always mounted (not conditionally rendered) to prevent D3 initialization issues. Data is fetched via `GET /v1/graph/nodes?limit=200` which queries Neo4j through the UI bridge on the store node.
+Data is fetched via `GET /v1/graph/nodes?limit=200` which queries Neo4j through the UI bridge on the store node, using `labels(n)` to determine node type.
 
 ---
 
 ## Suggested Future Patterns
 
-- **Entity Merge Pattern**: Handling when two entities are discovered to be the same thing (e.g. `SAME_AS` links)
-- **Temporal Supersession Pattern**: How newer claims supersede older ones over time
-- **Claim-to-Entity Edge Materialization**: Creating entity-to-entity edges from claims (currently only observations do this)
+- **Concept Merge Pattern**: Handling when two concepts refer to the same thing (e.g. `RELATED_TO {relation: "synonym"}`)
+- **Temporal Patterns**: Querying how knowledge evolved over time via `created_at` ordering
+- **Multi-hop Inference**: Traversing RELATED_TO chains to connect distant concepts
 
 ---
 
-*Document version: 0.4*
-*Last updated: 2026-01-29*
+*Document version: 2.0*
+*Last updated: 2026-02-02*

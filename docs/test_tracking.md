@@ -7,20 +7,17 @@ This document tracks tests for the Agentic Memory System — what's tested, what
 ## Running Tests
 
 ```bash
-# Unit tests only (no external deps)
-make test-unit
-
-# All tests that don't need Neo4j or API key
-make test
+# All tests that don't need API key
+pytest -m "not llm"
 
 # Store tests (needs Neo4j)
-make test-store
+pytest tests/test_store.py
+
+# P2P tests (no external deps)
+pytest tests/test_p2p.py
 
 # All tests (needs Neo4j + API key)
-make test-all
-
-# End-to-end in Docker (needs API key)
-make test-e2e
+pytest
 
 # Verbose / single test
 pytest -v -s
@@ -88,18 +85,21 @@ pytest tests/test_p2p.py::TestRoutingTable::test_route_method_observe
 
 | Test | What It Verifies |
 |------|------------------|
-| `test_create_and_get_node` | Basic node CRUD |
+| `test_create_and_get_concept` | Create a Concept node and retrieve it with labels |
 | `test_get_nonexistent_node` | Returns None for missing nodes |
-| `test_create_relationship` | Relationship creation and retrieval |
-| `test_query_by_type` | Filtering nodes by type property |
-| `test_find_claims_about` | Finding claims linked to an entity |
-| `test_find_claims_excludes_superseded` | Superseded claims are filtered out |
-| `test_find_unresolved_contradictions` | Finds claim pairs with CONTRADICTS relationship |
-| `test_get_or_create_entity` | Entity upsert logic |
-| `test_find_recent_observations` | Timestamp ordering, limit |
+| `test_create_relationship` | Relationship creation between Statement and Concept |
+| `test_find_statements_about` | Finding statements linked to a concept via ABOUT_SUBJECT/ABOUT_OBJECT |
+| `test_find_statements_excludes_superseded` | Superseded statements are filtered out |
+| `test_find_unresolved_contradictions` | Finds statement pairs with CONTRADICTS relationship |
+| `test_get_or_create_concept` | Concept upsert logic (case-insensitive dedup) |
+| `test_find_recent_observations` | Ordering by created_at, limit |
+| `test_find_recent_statements` | Projects subject_name, object_name from linked Concepts |
+| `test_get_all_concepts` | Returns all Concept nodes ordered by name |
+| `test_get_or_create_source` | Source upsert logic (dedup by name) |
+| `test_create_statement_with_negated` | Statement negation flag |
 | `test_clear_all` | Database wipe |
 
-**Status:** ✅ Passing (10 tests, needs Neo4j)
+**Status:** ✅ Passing (13 tests, needs Neo4j)
 
 ---
 
@@ -110,13 +110,14 @@ pytest tests/test_p2p.py::TestRoutingTable::test_route_method_observe
 
 | Test | What It Verifies |
 |------|------------------|
-| `test_extract_observation` | Observation text → ObservationData |
-| `test_parse_claim` | Claim text → ClaimData |
-| `test_parse_claim_with_contradiction` | Detects contradiction language |
+| `test_extract_observation` | Observation text → ObservationData (concepts, statements, topics) |
+| `test_extract_observation_concepts_have_kind` | Concepts have valid kind values |
+| `test_parse_claim` | Claim text → ClaimData (subject, predicate, object, confidence) |
+| `test_parse_claim_with_contradiction` | Detects contradiction language in context |
 | `test_generate_query` | Natural language → Cypher query |
 | `test_synthesize_response` | Graph results → natural language answer |
 
-**Status:** ✅ Passing (5 tests)
+**Status:** ✅ Passing (6 tests)
 
 ---
 
@@ -128,8 +129,8 @@ pytest tests/test_p2p.py::TestRoutingTable::test_route_method_observe
 | Test | What It Verifies |
 |------|------------------|
 | `test_text_overlap` | Helper function for basis matching |
-| `test_observe` | Full observation flow (LLM extraction → Neo4j storage) |
-| `test_claim` | Full claim flow (LLM parsing → Neo4j storage + linking) |
+| `test_observe` | Full observation flow (LLM extraction → Concepts, Statements, Source in Neo4j) |
+| `test_claim` | Full claim flow (LLM parsing → Statement with ABOUT_SUBJECT/ABOUT_OBJECT/ASSERTED_BY) |
 | `test_remember` | Query → Cypher → results → synthesis |
 
 **Status:** ✅ Passing (4 tests)
@@ -187,7 +188,7 @@ pytest tests/test_p2p.py::TestRoutingTable::test_route_method_observe
 ### Naming
 
 - Test files: `test_<module>.py`
-- Test functions: `test_<what>_<scenario>` (e.g., `test_find_claims_excludes_superseded`)
+- Test functions: `test_<what>_<scenario>` (e.g., `test_find_statements_excludes_superseded`)
 - Use descriptive names — tests are documentation
 
 ### Assertions
@@ -198,5 +199,5 @@ pytest tests/test_p2p.py::TestRoutingTable::test_route_method_observe
 
 ---
 
-*Document version: 0.3*
-*Last updated: 2026-01-29*
+*Document version: 2.0*
+*Last updated: 2026-02-02*

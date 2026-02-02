@@ -8,7 +8,7 @@ Prompts are loaded from YAML templates in prompts/ directory.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import anthropic
 
@@ -25,20 +25,40 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass
-class Extraction:
-    """A single extracted relationship from an observation."""
+class ComponentData:
+    """A sub-concept decomposition link."""
+
+    name: str
+    relation: str  # "is_a", "part_of", "has_property", "modifier", "head_noun"
+
+
+@dataclass
+class ConceptData:
+    """A concept extracted from text."""
+
+    name: str
+    kind: str = "entity"  # "entity", "attribute", "value", "category", "action"
+    aliases: list[str] = field(default_factory=list)
+    components: list[ComponentData] = field(default_factory=list)
+
+
+@dataclass
+class StatementData:
+    """A statement (reified triple) extracted from text."""
 
     subject: str
     predicate: str
     object: str
+    confidence: float = 1.0
+    negated: bool = False
 
 
 @dataclass
 class ObservationData:
     """Structured data extracted from an observation text."""
 
-    entities: list[str]
-    extractions: list[Extraction]
+    concepts: list[ConceptData]
+    statements: list[StatementData]
     topics: list[str]
 
 
@@ -50,7 +70,8 @@ class ClaimData:
     predicate: str
     object: str
     confidence: float
-    basis_descriptions: list[str]
+    negated: bool = False
+    basis_descriptions: list[str] = field(default_factory=list)
     supersedes_description: str | None = None
     contradicts_description: str | None = None
 
@@ -63,23 +84,66 @@ OBSERVATION_TOOL = {
     "input_schema": {
         "type": "object",
         "properties": {
-            "entities": {
-                "type": "array",
-                "items": {"type": "string"},
-                "description": "Entity names mentioned, lowercase (e.g. ['user', 'project alpha'])",
-            },
-            "extractions": {
+            "concepts": {
                 "type": "array",
                 "items": {
                     "type": "object",
                     "properties": {
-                        "subject": {"type": "string"},
-                        "predicate": {"type": "string"},
-                        "object": {"type": "string"},
+                        "name": {
+                            "type": "string",
+                            "description": "Canonical lowercase name for the concept",
+                        },
+                        "kind": {
+                            "type": "string",
+                            "enum": ["entity", "attribute", "value", "category", "action"],
+                            "description": "What kind of concept this is",
+                        },
+                        "aliases": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Alternative names for this concept",
+                        },
+                        "components": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "name": {"type": "string", "description": "Sub-concept name"},
+                                    "relation": {
+                                        "type": "string",
+                                        "enum": ["is_a", "part_of", "has_property", "modifier", "head_noun"],
+                                        "description": "How this sub-concept relates to the parent",
+                                    },
+                                },
+                                "required": ["name", "relation"],
+                            },
+                            "description": "Decomposition of compound concepts into sub-concepts",
+                        },
+                    },
+                    "required": ["name", "kind"],
+                },
+                "description": "Concepts mentioned in the observation",
+            },
+            "statements": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "subject": {"type": "string", "description": "Subject concept name (must match a concept)"},
+                        "predicate": {"type": "string", "description": "Relationship verb (e.g. 'is', 'prefers', 'has')"},
+                        "object": {"type": "string", "description": "Object concept name (must match a concept)"},
+                        "confidence": {
+                            "type": "number",
+                            "description": "Certainty 0.0-1.0. Direct statements = high, implied = lower.",
+                        },
+                        "negated": {
+                            "type": "boolean",
+                            "description": "True if this is a negation (e.g. 'is NOT'). Default false.",
+                        },
                     },
                     "required": ["subject", "predicate", "object"],
                 },
-                "description": "Extracted relationships",
+                "description": "Statements (triples) extracted from the observation",
             },
             "topics": {
                 "type": "array",
@@ -87,7 +151,7 @@ OBSERVATION_TOOL = {
                 "description": "Topic keywords",
             },
         },
-        "required": ["entities", "extractions", "topics"],
+        "required": ["concepts", "statements", "topics"],
     },
 }
 
@@ -97,12 +161,16 @@ CLAIM_TOOL = {
     "input_schema": {
         "type": "object",
         "properties": {
-            "subject": {"type": "string", "description": "The entity being described"},
+            "subject": {"type": "string", "description": "The subject concept name"},
             "predicate": {"type": "string", "description": "The relationship or attribute"},
-            "object": {"type": "string", "description": "The value or target"},
+            "object": {"type": "string", "description": "The object concept name"},
             "confidence": {
                 "type": "number",
                 "description": "Certainty 0.0-1.0. Hedging language = lower, definitive = higher.",
+            },
+            "negated": {
+                "type": "boolean",
+                "description": "True if this is a negation. Default false.",
             },
             "basis_descriptions": {
                 "type": "array",
@@ -111,11 +179,11 @@ CLAIM_TOOL = {
             },
             "supersedes_description": {
                 "type": ["string", "null"],
-                "description": "If this replaces a previous claim, describe what it replaces. null otherwise.",
+                "description": "If this replaces a previous statement, describe what it replaces. null otherwise.",
             },
             "contradicts_description": {
                 "type": ["string", "null"],
-                "description": "If this contradicts another claim, describe what it contradicts. null otherwise.",
+                "description": "If this contradicts another statement, describe what it contradicts. null otherwise.",
             },
         },
         "required": ["subject", "predicate", "object", "confidence", "basis_descriptions"],
@@ -157,9 +225,33 @@ class LLMTranslator:
         )
         logger.debug("extract_observation RESPONSE:\n%s", response.content)
         data = self._extract_tool_input(response)
+
+        concepts = []
+        for c in data.get("concepts", []):
+            components = [
+                ComponentData(name=comp["name"], relation=comp["relation"])
+                for comp in c.get("components", [])
+            ]
+            concepts.append(ConceptData(
+                name=c["name"],
+                kind=c.get("kind", "entity"),
+                aliases=c.get("aliases", []),
+                components=components,
+            ))
+
+        statements = []
+        for s in data.get("statements", []):
+            statements.append(StatementData(
+                subject=s["subject"],
+                predicate=s["predicate"],
+                object=s["object"],
+                confidence=float(s.get("confidence", 1.0)),
+                negated=s.get("negated", False),
+            ))
+
         return ObservationData(
-            entities=data.get("entities", []),
-            extractions=[Extraction(**e) for e in data.get("extractions", [])],
+            concepts=concepts,
+            statements=statements,
             topics=data.get("topics", []),
         )
 
@@ -194,6 +286,7 @@ class LLMTranslator:
             predicate=data["predicate"],
             object=data["object"],
             confidence=float(data.get("confidence", 0.7)),
+            negated=data.get("negated", False),
             basis_descriptions=data.get("basis_descriptions", []),
             supersedes_description=data.get("supersedes_description"),
             contradicts_description=data.get("contradicts_description"),

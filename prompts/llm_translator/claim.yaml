@@ -1,5 +1,5 @@
 name: claim_parsing
-version: "1.0"
+version: "2.0"
 description: Parse claim text into structured knowledge graph format
 extends: shared/base
 
@@ -11,6 +11,8 @@ system: |
   - Definitive statements ("is", "definitely", "always") = higher confidence (0.8-0.95)
   - Direct observations = highest confidence (0.9-1.0)
 
+  Use negated=true for negative assertions (e.g. "user does NOT prefer mornings").
+
   {{ constraints }}
 
 user: |
@@ -20,7 +22,7 @@ user: |
   {% if context %}
   Context (existing knowledge):
   {% for item in context %}
-  - [{{ item.node_kind }}] {{ item.get('raw_content') or item.get('subject_text', '') + ' ' + item.get('predicate_text', '') + ' ' + item.get('object_text', '') }}
+  - [{{ item.node_kind }}] {{ item.get('raw_content') or item.get('subject_name', '') + ' ' + item.get('predicate', '') + ' ' + item.get('object_name', '') }}
   {% endfor %}
   {% endif %}
 
@@ -32,4 +34,4 @@ variables:
   context:
     type: array
     required: false
-    description: Recent claims and observations for linking basis
+    description: Recent statements and observations for linking basis

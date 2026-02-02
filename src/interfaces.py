@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import logging
 import uuid
-from datetime import datetime, timezone
 from typing import Any
 
 from src.llm import LLMTranslator
@@ -19,10 +18,6 @@ logger = logging.getLogger(__name__)
 
 def _new_id() -> str:
     return str(uuid.uuid4())
-
-
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
 
 
 class MemoryService:
@@ -39,34 +34,55 @@ class MemoryService:
     async def observe(self, text: str, source: str) -> str:
         """Record an observation from the external world.
 
-        The LLM extracts entities and relationships from the text.
-        Returns the observation node ID.
+        The LLM extracts concepts (with decomposition) and statements
+        from the text. Returns the observation node ID.
         """
         obs_id = _new_id()
         extraction = await self.llm.extract_observation(text)
 
+        # Ensure source exists
+        source_id = await self.store.get_or_create_source(source, kind="user")
+
         # Create the observation node
-        await self.store.create_node(obs_id, {
-            "type": "Observation",
-            "source": source,
-            "timestamp": _now(),
-            "raw_content": text,
-            "topics": ",".join(extraction.topics),
-        })
+        await self.store.create_observation(obs_id, raw_content=text, topics=extraction.topics)
+        await self.store.create_relationship(obs_id, "RECORDED_BY", source_id)
 
-        # Ensure entity nodes exist and link them
-        for entity_name in extraction.entities:
-            entity_id = await self.store.get_or_create_entity(
-                entity_name, _new_id()
+        # Create concepts and link to observation
+        concept_ids: dict[str, str] = {}
+        for concept in extraction.concepts:
+            cid = await self.store.get_or_create_concept(
+                concept.name, _new_id(), kind=concept.kind
             )
-            await self.store.create_relationship(obs_id, "SUBJECT", entity_id)
+            concept_ids[concept.name] = cid
+            await self.store.create_relationship(obs_id, "MENTIONS", cid)
 
-        # Create entity-to-entity edges from extracted triples
-        for ext in extraction.extractions:
-            subj_id = await self.store.get_or_create_entity(ext.subject, _new_id())
-            obj_id = await self.store.get_or_create_entity(ext.object, _new_id())
-            rel_type = _normalize_predicate(ext.predicate)
-            await self.store.create_relationship(subj_id, rel_type, obj_id)
+            # Decompose compound concepts
+            for component in concept.components:
+                comp_id = await self.store.get_or_create_concept(
+                    component.name, _new_id()
+                )
+                await self.store.create_relationship(
+                    cid, "RELATED_TO", comp_id, {"relation": component.relation}
+                )
+
+        # Create statements (reified triples)
+        for stmt in extraction.statements:
+            stmt_id = _new_id()
+            await self.store.create_statement(
+                stmt_id, stmt.predicate, stmt.confidence, stmt.negated
+            )
+
+            subj_id = concept_ids.get(stmt.subject) or await self.store.get_or_create_concept(
+                stmt.subject, _new_id()
+            )
+            obj_id = concept_ids.get(stmt.object) or await self.store.get_or_create_concept(
+                stmt.object, _new_id()
+            )
+
+            await self.store.create_relationship(stmt_id, "ABOUT_SUBJECT", subj_id)
+            await self.store.create_relationship(stmt_id, "ABOUT_OBJECT", obj_id)
+            await self.store.create_relationship(stmt_id, "DERIVED_FROM", obs_id)
+            await self.store.create_relationship(stmt_id, "ASSERTED_BY", source_id)
 
         return obs_id
 
@@ -74,47 +90,39 @@ class MemoryService:
         """Assert a claim (inference, fact, contradiction, or resolution).
 
         The LLM parses the claim, identifies basis, confidence, and
-        contradiction/supersession. Returns the claim node ID.
+        contradiction/supersession. Returns the statement node ID.
         """
         # Gather recent context for the LLM to reference
-        recent_claims = await self.store.find_recent_claims(limit=10)
+        recent_statements = await self.store.find_recent_statements(limit=10)
         recent_obs = await self.store.find_recent_observations(limit=10)
         context = [
-            {**c, "node_kind": "claim"} for c in recent_claims
+            {**s, "node_kind": "statement"} for s in recent_statements
         ] + [
             {**o, "node_kind": "observation"} for o in recent_obs
         ]
 
         parsed = await self.llm.parse_claim(text, context)
 
-        # Determine node type
-        node_type = "Claim"
-        if parsed.supersedes_description:
-            node_type = "Resolution"
+        source_id = await self.store.get_or_create_source(source, kind="agent")
 
-        claim_id = _new_id()
-        await self.store.create_node(claim_id, {
-            "type": node_type,
-            "source": source,
-            "timestamp": _now(),
-            "subject_text": parsed.subject,
-            "predicate_text": parsed.predicate,
-            "object_text": parsed.object,
-            "confidence": parsed.confidence,
-        })
-
-        # Link to entity
-        entity_id = await self.store.get_or_create_entity(
-            parsed.subject, _new_id()
+        stmt_id = _new_id()
+        await self.store.create_statement(
+            stmt_id, parsed.predicate, parsed.confidence, parsed.negated
         )
-        await self.store.create_relationship(claim_id, "SUBJECT", entity_id)
+
+        # Link to subject and object concepts
+        subj_id = await self.store.get_or_create_concept(parsed.subject, _new_id())
+        obj_id = await self.store.get_or_create_concept(parsed.object, _new_id())
+        await self.store.create_relationship(stmt_id, "ABOUT_SUBJECT", subj_id)
+        await self.store.create_relationship(stmt_id, "ABOUT_OBJECT", obj_id)
+        await self.store.create_relationship(stmt_id, "ASSERTED_BY", source_id)
 
         # Link basis — match descriptions to existing nodes
         for basis_desc in parsed.basis_descriptions:
             basis_node = await self._find_matching_node(basis_desc)
             if basis_node:
                 await self.store.create_relationship(
-                    claim_id, "BASIS", basis_node["id"]
+                    stmt_id, "DERIVED_FROM", basis_node["id"]
                 )
 
         # Link supersession
@@ -124,7 +132,7 @@ class MemoryService:
             )
             if superseded:
                 await self.store.create_relationship(
-                    claim_id, "SUPERSEDES", superseded["id"]
+                    stmt_id, "SUPERSEDES", superseded["id"]
                 )
 
         # Link contradiction
@@ -134,24 +142,18 @@ class MemoryService:
             )
             if contradicted:
                 await self.store.create_relationship(
-                    claim_id, "CONTRADICTS", contradicted["id"]
+                    stmt_id, "CONTRADICTS", contradicted["id"]
                 )
 
-        return claim_id
+        return stmt_id
 
     async def remember(self, query: str) -> str:
-        """Query the knowledge graph and return a resolved natural language response.
-
-        The LLM translates the question to a Cypher query, executes it,
-        then synthesizes a response that accounts for supersession and
-        contradiction resolution.
-        """
+        """Query the knowledge graph and return a resolved natural language response."""
         # Generate and execute the graph query
         try:
             cypher = await self.llm.generate_query(query)
             results = await self.store.raw_query(cypher)
         except Exception:  # pylint: disable=broad-exception-caught  # fallback to broad search if query generation fails
-            # Fallback: gather broad context if query generation fails
             results = []
 
         # If the generated query returned nothing, fall back to broad search
@@ -159,7 +161,6 @@ class MemoryService:
             results = await self._broad_search(query)
 
         # Synthesize a natural language response
-        # Convert neo4j node objects to plain dicts for serialization
         serializable = []
         for record in results:
             row = {}
@@ -172,23 +173,20 @@ class MemoryService:
 
         return await self.llm.synthesize_response(query, serializable)
 
-    # pylint: disable-next=unused-argument  # `query` kept for interface consistency; broad fetch for now
+    # pylint: disable-next=unused-argument  # `query` kept for interface consistency
     async def _broad_search(self, query: str) -> list[dict]:
-        """Fallback search: get recent observations, claims, and resolutions."""
+        """Fallback search: get recent observations and statements."""
         obs = await self.store.find_recent_observations(limit=10)
-        claims = await self.store.find_recent_claims(limit=10)
+        statements = await self.store.find_recent_statements(limit=10)
         results = []
         for o in obs:
             results.append({"node": o, "kind": "observation"})
-        for c in claims:
-            results.append({"node": c, "kind": "claim"})
+        for s in statements:
+            results.append({"node": s, "kind": "statement"})
         return results
 
     async def _find_matching_node(self, description: str) -> dict | None:
-        """Best-effort match a textual description to an existing node.
-
-        Searches recent observations and claims for content overlap.
-        """
+        """Best-effort match a textual description to an existing node."""
         description_lower = description.lower()
 
         # Search observations
@@ -197,16 +195,16 @@ class MemoryService:
             if raw and _text_overlap(description_lower, raw):
                 return obs
 
-        # Search claims
-        for claim in await self.store.find_recent_claims(limit=20):
+        # Search statements
+        for stmt in await self.store.find_recent_statements(limit=20):
             parts = [
-                claim.get("subject_text", ""),
-                claim.get("predicate_text", ""),
-                claim.get("object_text", ""),
+                stmt.get("subject_name", ""),
+                stmt.get("predicate", ""),
+                stmt.get("object_name", ""),
             ]
             combined = " ".join(parts).lower()
             if _text_overlap(description_lower, combined):
-                return claim
+                return stmt
 
         return None
 
@@ -216,9 +214,9 @@ class MemoryService:
         """Return recent observations from the store."""
         return await self.store.find_recent_observations(limit=limit)
 
-    async def get_recent_claims(self, limit: int = 20) -> list[dict[str, Any]]:
-        """Return recent claims from the store."""
-        return await self.store.find_recent_claims(limit=limit)
+    async def get_recent_statements(self, limit: int = 20) -> list[dict[str, Any]]:
+        """Return recent statements from the store."""
+        return await self.store.find_recent_statements(limit=limit)
 
     async def get_unresolved_contradictions(
         self,
@@ -226,9 +224,9 @@ class MemoryService:
         """Return unresolved contradiction pairs."""
         return await self.store.find_unresolved_contradictions()
 
-    async def get_entities(self) -> list[dict[str, Any]]:
-        """Return all entity nodes."""
-        return await self.store.query_by_type("Entity")
+    async def get_concepts(self) -> list[dict[str, Any]]:
+        """Return all concept nodes."""
+        return await self.store.get_all_concepts()
 
     async def infer(self, observation_text: str) -> str | None:
         """Use the LLM to produce an inference claim from an observation."""
@@ -237,11 +235,6 @@ class MemoryService:
     async def clear(self) -> None:
         """Clear all data from the graph."""
         await self.store.clear_all()
-
-
-def _normalize_predicate(predicate: str) -> str:
-    """Convert predicate text to a valid Neo4j relationship type."""
-    return predicate.strip().upper().replace(" ", "_").replace("-", "_")
 
 
 def _text_overlap(a: str, b: str) -> bool:

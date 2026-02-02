@@ -99,7 +99,7 @@ def test_jinja2_loops(loader: PromptLoader):
         claim_text="user prefers morning",
         context=[
             {"node_kind": "observation", "raw_content": "user said morning is best"},
-            {"node_kind": "claim", "subject_text": "user", "predicate_text": "likes", "object_text": "coffee"},
+            {"node_kind": "statement", "subject_name": "user", "predicate": "likes", "object_name": "coffee"},
         ]
     )
     rendered = prompt.render(vars)
@@ -150,7 +150,7 @@ def test_synthesis_vars_with_results():
     """SynthesisVars handles result list."""
     vars = SynthesisVars(
         query="what does user like?",
-        results=[{"type": "Claim", "object_text": "pizza"}]
+        results=[{"node_kind": "statement", "predicate": "likes", "object_name": "pizza"}]
     )
     assert vars.query == "what does user like?"
     assert len(vars.results) == 1

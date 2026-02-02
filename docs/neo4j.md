@@ -45,26 +45,30 @@ Open in browser: **http://localhost:7474**
 
 ## Data Model
 
-### Node Types
+### Node Labels
 
-All nodes have label `Node` with a `type` property distinguishing them.
+The graph uses four distinct Neo4j labels (not a generic `:Node` with type property).
 
-| Type | Properties | Description |
-|------|------------|-------------|
-| `Observation` | `id`, `raw_content`, `source`, `timestamp`, `type` | Raw natural language input |
-| `Entity` | `id`, `name`, `entity_type`, `type` | Named thing (person, place, concept) |
-| `Claim` | `id`, `subject_text`, `predicate_text`, `object_text`, `confidence`, `source`, `timestamp`, `type` | Structured assertion (inferred by agents only) |
-| `Resolution` | Same as Claim | A Claim that supersedes contradicting claims |
+| Label | Properties | Description |
+|-------|------------|-------------|
+| `:Concept` | `id`, `name`, `kind`, `aliases[]`, `created_at` | Named thing (person, place, idea, value, category) |
+| `:Statement` | `id`, `predicate`, `confidence`, `negated`, `created_at` | Reified triple with metadata |
+| `:Observation` | `id`, `raw_content`, `topics[]`, `created_at` | Raw natural language input |
+| `:Source` | `id`, `name`, `kind`, `created_at` | Who produced this knowledge (user, agent, system) |
 
 ### Relationship Types
 
 | Relationship | From | To | Meaning |
 |--------------|------|------|---------|
-| `SUBJECT` | Observation/Claim | Entity | Links to the entity being discussed |
-| `BASIS` | Claim | Observation/Claim | Claim's evidential basis |
-| `CONTRADICTS` | Claim | Claim | Claims are in conflict |
-| `SUPERSEDES` | Claim/Resolution | Claim | Newer claim replaces older |
-| *Dynamic predicates* | Entity | Entity | Knowledge triples (e.g. `IS_NAMED`, `PREFERS`, `WORKS_AT`) |
+| `ABOUT_SUBJECT` | Statement | Concept | Subject of the statement |
+| `ABOUT_OBJECT` | Statement | Concept | Object/value of the statement |
+| `DERIVED_FROM` | Statement | Observation or Statement | Provenance chain |
+| `ASSERTED_BY` | Statement | Source | Who asserted this |
+| `SUPERSEDES` | Statement | Statement | Newer replaces older |
+| `CONTRADICTS` | Statement | Statement | Conflicting statements |
+| `MENTIONS` | Observation | Concept | Concepts in the observation |
+| `RECORDED_BY` | Observation | Source | Who recorded this |
+| `RELATED_TO` | Concept | Concept | Decomposition/hierarchy (property: `relation`) |
 
 ---
 
@@ -76,105 +80,136 @@ All nodes have label `Node` with a `type` property distinguishing them.
 -- See everything (limit for safety)
 MATCH (n) RETURN n LIMIT 50
 
--- Count nodes by type
-MATCH (n:Node) RETURN n.type, count(*) ORDER BY count(*) DESC
+-- Count nodes by label
+MATCH (n) RETURN labels(n)[0] AS label, count(*) ORDER BY count(*) DESC
 
 -- List all relationship types
 CALL db.relationshipTypes()
+
+-- Show indexes and constraints
+SHOW INDEXES
+SHOW CONSTRAINTS
 ```
 
 ### Observations
 
 ```cypher
 -- All observations
-MATCH (obs:Node {type: 'Observation'})
-RETURN obs.raw_content, obs.source, obs.timestamp
-ORDER BY obs.timestamp DESC
+MATCH (o:Observation)
+RETURN o.raw_content, o.topics, o.created_at
+ORDER BY o.created_at DESC
 
 -- Recent observations (last 10)
-MATCH (obs:Node {type: 'Observation'})
-RETURN obs.raw_content, obs.timestamp
-ORDER BY obs.timestamp DESC
+MATCH (o:Observation)
+RETURN o.raw_content, o.created_at
+ORDER BY o.created_at DESC
 LIMIT 10
 
--- Claims based on observations (created by inference agent)
-MATCH (claim:Node {type: 'Claim'})-[:BASIS]->(obs:Node {type: 'Observation'})
-RETURN obs.raw_content,
-       claim.subject_text,
-       claim.predicate_text,
-       claim.object_text,
-       claim.confidence
+-- Observations with their source
+MATCH (o:Observation)-[:RECORDED_BY]->(src:Source)
+RETURN o.raw_content, src.name, o.created_at
+ORDER BY o.created_at DESC
 
--- Entity-to-entity knowledge triples (created by observe())
-MATCH (a:Node {type: 'Entity'})-[r]->(b:Node {type: 'Entity'})
-RETURN a.name, type(r), b.name
+-- What concepts does an observation mention?
+MATCH (o:Observation)-[:MENTIONS]->(c:Concept)
+RETURN o.raw_content, collect(c.name) AS concepts
 ```
 
-### Entities
+### Concepts
 
 ```cypher
--- All entities
-MATCH (e:Node {type: 'Entity'})
-RETURN e.name, e.entity_type
+-- All concepts
+MATCH (c:Concept)
+RETURN c.name, c.kind, c.aliases
+ORDER BY c.name
 
--- Entities and what mentions them
-MATCH (obs:Node {type: 'Observation'})-[:SUBJECT]->(e:Node {type: 'Entity'})
-RETURN e.name, collect(obs.raw_content) as mentioned_in
+-- Concept decomposition
+MATCH (c:Concept)-[r:RELATED_TO]->(sub:Concept)
+RETURN c.name, r.relation, sub.name
 
--- Find a specific entity
-MATCH (e:Node {type: 'Entity', name: 'ami'})
-RETURN e
+-- Find a specific concept (case-insensitive)
+MATCH (c:Concept)
+WHERE toLower(c.name) = 'bitcoin'
+RETURN c
 ```
 
-### Claims
+### Statements
 
 ```cypher
--- All claims
-MATCH (c:Node {type: 'Claim'})
-RETURN c.subject_text, c.predicate_text, c.object_text, c.confidence, c.source
+-- All statements with subject and object names
+MATCH (s:Statement)
+OPTIONAL MATCH (s)-[:ABOUT_SUBJECT]->(subj:Concept)
+OPTIONAL MATCH (s)-[:ABOUT_OBJECT]->(obj:Concept)
+RETURN subj.name, s.predicate, obj.name, s.confidence, s.negated
+ORDER BY s.created_at DESC
 
--- Active claims only (not superseded)
-MATCH (c:Node {type: 'Claim'})
-WHERE NOT EXISTS { MATCH (:Node)-[:SUPERSEDES]->(c) }
-RETURN c.subject_text, c.predicate_text, c.object_text, c.confidence
+-- Active statements only (not superseded)
+MATCH (s:Statement)
+WHERE NOT EXISTS { MATCH (:Statement)-[:SUPERSEDES]->(s) }
+OPTIONAL MATCH (s)-[:ABOUT_SUBJECT]->(subj:Concept)
+OPTIONAL MATCH (s)-[:ABOUT_OBJECT]->(obj:Concept)
+RETURN subj.name, s.predicate, obj.name, s.confidence
 
--- Claims with their basis
-MATCH (c:Node {type: 'Claim'})-[:BASIS]->(basis)
-RETURN c.subject_text, c.predicate_text, c.object_text,
-       basis.type, basis.raw_content
+-- Statements about a specific concept
+MATCH (s:Statement)-[:ABOUT_SUBJECT|ABOUT_OBJECT]->(c:Concept)
+WHERE toLower(c.name) = 'user'
+AND NOT EXISTS { MATCH (:Statement)-[:SUPERSEDES]->(s) }
+OPTIONAL MATCH (s)-[:ABOUT_SUBJECT]->(subj:Concept)
+OPTIONAL MATCH (s)-[:ABOUT_OBJECT]->(obj:Concept)
+RETURN subj.name, s.predicate, obj.name, s.confidence
 
--- Claims about a specific entity
-MATCH (c:Node {type: 'Claim'})-[:SUBJECT]->(e:Node {type: 'Entity'})
-WHERE toLower(e.name) = 'user'
-RETURN c.subject_text, c.predicate_text, c.object_text
+-- Statements with their basis
+MATCH (s:Statement)-[:DERIVED_FROM]->(basis)
+OPTIONAL MATCH (s)-[:ABOUT_SUBJECT]->(subj:Concept)
+OPTIONAL MATCH (s)-[:ABOUT_OBJECT]->(obj:Concept)
+RETURN subj.name, s.predicate, obj.name, labels(basis)[0] AS basis_type,
+       CASE WHEN basis:Observation THEN basis.raw_content ELSE null END AS basis_content
+```
+
+### Sources
+
+```cypher
+-- All sources
+MATCH (src:Source)
+RETURN src.name, src.kind, src.created_at
+
+-- What has a source asserted?
+MATCH (s:Statement)-[:ASSERTED_BY]->(src:Source {name: 'inference_agent'})
+OPTIONAL MATCH (s)-[:ABOUT_SUBJECT]->(subj:Concept)
+OPTIONAL MATCH (s)-[:ABOUT_OBJECT]->(obj:Concept)
+RETURN subj.name, s.predicate, obj.name, s.confidence
 ```
 
 ### Contradictions
 
 ```cypher
--- Find contradicting claims
-MATCH (c1:Node {type: 'Claim'})-[:CONTRADICTS]->(c2:Node {type: 'Claim'})
-RETURN c1.subject_text, c1.predicate_text, c1.object_text,
-       c2.subject_text, c2.predicate_text, c2.object_text
+-- Find contradicting statements
+MATCH (s1:Statement)-[:CONTRADICTS]->(s2:Statement)
+OPTIONAL MATCH (s1)-[:ABOUT_SUBJECT]->(subj1:Concept)
+OPTIONAL MATCH (s1)-[:ABOUT_OBJECT]->(obj1:Concept)
+OPTIONAL MATCH (s2)-[:ABOUT_SUBJECT]->(subj2:Concept)
+OPTIONAL MATCH (s2)-[:ABOUT_OBJECT]->(obj2:Concept)
+RETURN subj1.name, s1.predicate, obj1.name,
+       subj2.name, s2.predicate, obj2.name
 
 -- Unresolved contradictions (neither side superseded)
-MATCH (c1:Node)-[:CONTRADICTS]->(c2:Node)
-WHERE NOT EXISTS { MATCH (:Node {type: 'Resolution'})-[:SUPERSEDES]->(c1) }
-AND NOT EXISTS { MATCH (:Node {type: 'Resolution'})-[:SUPERSEDES]->(c2) }
-RETURN c1, c2
+MATCH (s1:Statement)-[:CONTRADICTS]->(s2:Statement)
+WHERE NOT EXISTS { MATCH (:Statement)-[:SUPERSEDES]->(s1) }
+AND NOT EXISTS { MATCH (:Statement)-[:SUPERSEDES]->(s2) }
+RETURN s1, s2
 ```
 
 ### Tracing Provenance
 
 ```cypher
--- Trace a claim back to its origins
-MATCH path = (c:Node {type: 'Claim'})-[:BASIS*]->(origin)
-WHERE NOT (origin)-[:BASIS]->()
+-- Trace a statement back to its origins
+MATCH path = (s:Statement)-[:DERIVED_FROM*]->(origin)
+WHERE NOT (origin)-[:DERIVED_FROM]->()
 RETURN path
 
--- Full lineage for a specific claim
-MATCH (c:Node {type: 'Claim', id: $claim_id})
-MATCH path = (c)-[:BASIS*0..]->(basis)
+-- Full lineage for a specific statement
+MATCH (s:Statement {id: $stmt_id})
+MATCH path = (s)-[:DERIVED_FROM*0..]->(basis)
 RETURN path
 ```
 
@@ -185,23 +220,22 @@ RETURN path
 MATCH (n) DETACH DELETE n
 
 -- Delete only observations
-MATCH (n:Node {type: 'Observation'}) DETACH DELETE n
+MATCH (n:Observation) DETACH DELETE n
 
 -- Count everything
-MATCH (n) RETURN count(n) as total_nodes
+MATCH (n) RETURN labels(n)[0] AS label, count(n) AS total
 ```
 
 ---
 
 ## Graph Visualization Tips
 
-### Color by Type
+### Color by Label
 
-In the Neo4j Browser graph view:
+In the Neo4j Browser graph view, nodes are automatically colored by label. You can customize:
 1. Click on a node
 2. Click the colored circle at the bottom
-3. Choose a color for that node type
-4. Repeat for each type (Observation=blue, Claim=green, Entity=orange, etc.)
+3. Choose a color for that label
 
 ### Expand Relationships
 
@@ -246,6 +280,26 @@ In Docker Compose, services use `bolt://neo4j:7687` (internal network).
 
 ---
 
+## Indexes and Constraints
+
+The system automatically creates these on startup via `store.ensure_indexes()`:
+
+```cypher
+-- Uniqueness constraints
+CREATE CONSTRAINT concept_id IF NOT EXISTS FOR (c:Concept) REQUIRE c.id IS UNIQUE
+CREATE CONSTRAINT statement_id IF NOT EXISTS FOR (s:Statement) REQUIRE s.id IS UNIQUE
+CREATE CONSTRAINT observation_id IF NOT EXISTS FOR (o:Observation) REQUIRE o.id IS UNIQUE
+CREATE CONSTRAINT source_id IF NOT EXISTS FOR (s:Source) REQUIRE s.id IS UNIQUE
+
+-- Performance indexes
+CREATE INDEX concept_name IF NOT EXISTS FOR (c:Concept) ON (c.name)
+CREATE INDEX statement_predicate IF NOT EXISTS FOR (s:Statement) ON (s.predicate)
+CREATE INDEX statement_created IF NOT EXISTS FOR (s:Statement) ON (s.created_at)
+CREATE INDEX observation_created IF NOT EXISTS FOR (o:Observation) ON (o.created_at)
+```
+
+---
+
 ## Troubleshooting
 
 ### Can't connect to browser
@@ -264,15 +318,6 @@ docker compose restart neo4j
 ### "No write operations allowed" error
 
 Neo4j Community Edition doesn't support clusters. Ensure only one instance is writing.
-
-### Slow queries
-
-```cypher
--- Add index on frequently queried properties
-CREATE INDEX node_type_index FOR (n:Node) ON (n.type)
-CREATE INDEX node_id_index FOR (n:Node) ON (n.id)
-CREATE INDEX entity_name_index FOR (n:Node) ON (n.name)
-```
 
 ### Data not persisting
 
@@ -293,5 +338,5 @@ docker compose down -v  # DELETES volumes
 
 ---
 
-*Document version: 0.2*
-*Last updated: 2026-01-29*
+*Document version: 2.0*
+*Last updated: 2026-02-02*

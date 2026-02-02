@@ -1,37 +1,37 @@
 name: contradiction_detection
-version: "1.0"
-description: Detect and describe contradictions between claims (future use - currently rule-based)
+version: "2.0"
+description: Detect and describe contradictions between statements (future use - currently rule-based)
 extends: shared/base
 
 # NOTE: The validator agent currently uses rule-based contradiction detection
-# (comparing subject_text + predicate_text + object_text). This prompt is
+# (comparing subject_name + predicate + object_name). This prompt is
 # reserved for future LLM-based semantic contradiction detection.
 
 user: |
-  You are a contradiction detection agent. Analyze the following claims about "{{ subject }}" and identify any contradictions.
+  You are a contradiction detection agent. Analyze the following statements about "{{ subject }}" and identify any contradictions.
 
-  ## Claims
-  {% for claim in claims %}
-  - [{{ claim.id }}] {{ claim.subject_text }} {{ claim.predicate_text }} "{{ claim.object_text }}" (confidence: {{ claim.confidence }})
+  ## Statements
+  {% for stmt in statements %}
+  - [{{ stmt.id }}] {{ stmt.subject_name }} {{ stmt.predicate }} "{{ stmt.object_name }}" (confidence: {{ stmt.confidence }})
   {% endfor %}
 
   ## Task
-  Identify pairs of claims that contradict each other. Two claims contradict if:
+  Identify pairs of statements that contradict each other. Two statements contradict if:
   - They are about the same subject and predicate
   - But assert incompatible objects (e.g., "prefers morning" vs "prefers afternoon")
 
   For each contradiction found, output:
-  CONTRADICTION claim1_id claim2_id reason="..."
+  CONTRADICTION stmt1_id stmt2_id reason="..."
 
   If no contradictions exist, output:
   NO_CONTRADICTIONS
 
 variables:
-  claims:
+  statements:
     type: array
     required: true
-    description: List of claims to analyze
+    description: List of statements to analyze
   subject:
     type: string
     required: false
-    description: The entity subject being validated
+    description: The concept subject being validated

@@ -1,6 +1,6 @@
-"""Validator agent: detects contradictions between claims.
+"""Validator agent: detects contradictions between statements.
 
-Monitors the claim store for pairs of claims that contradict
+Monitors the statement store for pairs of statements that contradict
 each other and flags them. Uses LocalAgentState for idempotency
 tracking.
 """
@@ -22,7 +22,7 @@ STATE_KEY = "agent:validator:checked_pairs"
 
 
 class ValidatorAgent(WorkerAgent):
-    """Watches for contradicting claims and flags them."""
+    """Watches for contradicting statements and flags them."""
 
     def __init__(
         self,
@@ -42,38 +42,38 @@ class ValidatorAgent(WorkerAgent):
         return ["claim"]
 
     async def process(self) -> list[str]:  # pylint: disable=too-many-locals  # contradiction detection requires tracking many pair-wise variables
-        """Check for contradicting claims and flag them."""
-        claims = await self.memory.get_recent_claims(limit=20)
-        logger.debug("Fetched %d claims to validate", len(claims))
+        """Check for contradicting statements and flag them."""
+        statements = await self.memory.get_recent_statements(limit=20)
+        logger.debug("Fetched %d statements to validate", len(statements))
 
-        # Group claims by entity (subject_text)
+        # Group statements by subject concept
         by_subject: dict[str, list[dict]] = {}
-        for c in claims:
-            subj = c.get("subject_text", "unknown")
-            by_subject.setdefault(subj, []).append(c)
+        for s in statements:
+            subj = s.get("subject_name", "unknown")
+            by_subject.setdefault(subj, []).append(s)
 
         contradiction_claims = []
 
         logger.debug("Grouped into %d subjects: %s", len(by_subject), list(by_subject.keys()))
 
-        for subject, subject_claims in by_subject.items():
+        for subject, subject_statements in by_subject.items():
             by_predicate: dict[str, list[dict]] = {}
-            for c in subject_claims:
-                pred = c.get("predicate_text", "")
-                by_predicate.setdefault(pred, []).append(c)
+            for s in subject_statements:
+                pred = s.get("predicate", "")
+                by_predicate.setdefault(pred, []).append(s)
 
-            for predicate, pred_claims in by_predicate.items():
-                if len(pred_claims) < 2:
+            for predicate, pred_statements in by_predicate.items():
+                if len(pred_statements) < 2:
                     continue
 
-                for i, c1 in enumerate(pred_claims):
-                    for c2 in pred_claims[i + 1 :]:
-                        obj1 = c1.get("object_text", "")
-                        obj2 = c2.get("object_text", "")
+                for i, s1 in enumerate(pred_statements):
+                    for s2 in pred_statements[i + 1 :]:
+                        obj1 = s1.get("object_name", "")
+                        obj2 = s2.get("object_name", "")
                         if obj1 == obj2:
                             continue
 
-                        pair_key = ":".join(sorted([c1["id"], c2["id"]]))
+                        pair_key = ":".join(sorted([s1["id"], s2["id"]]))
 
                         # Check if already flagged
                         if self.state and await self.state.is_processed(STATE_KEY, pair_key):
@@ -81,8 +81,8 @@ class ValidatorAgent(WorkerAgent):
                             continue
 
                         claim_text = (
-                            f"the claim that {subject} {predicate} '{obj1}' "
-                            f"contradicts the claim that {subject} {predicate} '{obj2}'"
+                            f"the statement that {subject} {predicate} '{obj1}' "
+                            f"contradicts the statement that {subject} {predicate} '{obj2}'"
                         )
                         contradiction_claims.append(claim_text)
 

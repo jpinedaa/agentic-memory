@@ -47,9 +47,9 @@ class P2PMemoryClient:
         """Return recent observations via P2P routing."""
         return await self._call("get_recent_observations", {"limit": limit})
 
-    async def get_recent_claims(self, limit: int = 20) -> list[dict[str, Any]]:
-        """Return recent claims via P2P routing."""
-        return await self._call("get_recent_claims", {"limit": limit})
+    async def get_recent_statements(self, limit: int = 20) -> list[dict[str, Any]]:
+        """Return recent statements via P2P routing."""
+        return await self._call("get_recent_statements", {"limit": limit})
 
     async def get_unresolved_contradictions(
         self,
@@ -57,9 +57,9 @@ class P2PMemoryClient:
         """Return unresolved contradictions via P2P routing."""
         return await self._call("get_unresolved_contradictions", {})
 
-    async def get_entities(self) -> list[dict[str, Any]]:
-        """Return all entities via P2P routing."""
-        return await self._call("get_entities", {})
+    async def get_concepts(self) -> list[dict[str, Any]]:
+        """Return all concepts via P2P routing."""
+        return await self._call("get_concepts", {})
 
     async def clear(self) -> None:
         """Clear all data via P2P routing."""

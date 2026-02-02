@@ -1,5 +1,5 @@
 name: synthesis
-version: "1.0"
+version: "2.0"
 description: Synthesize natural language response from graph query results
 extends: shared/base
 
@@ -10,8 +10,8 @@ user: |
   Given a question and graph data retrieved from a knowledge store, produce a clear natural language answer.
 
   ## Rules
-  - Prioritize Resolution nodes over raw Claims (resolutions are authoritative)
-  - Note when claims have been superseded
+  - Prioritize statements that supersede others (they are authoritative resolutions)
+  - Note when statements have been superseded
   - Mention confidence levels when relevant (e.g., "likely" for 0.7, "confident" for 0.9)
   - If there are unresolved contradictions, mention them
   - If no relevant data exists, say so clearly

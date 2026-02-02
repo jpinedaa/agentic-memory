@@ -40,7 +40,7 @@ async def test_observe(memory: MemoryService):
     # Check the observation was stored
     node = await memory.store.get_node(obs_id)
     assert node is not None
-    assert node["type"] == "Observation"
+    assert "Observation" in node["_labels"]
     assert "early" in node["raw_content"] or "meetings" in node["raw_content"]
 
 
@@ -60,8 +60,7 @@ async def test_claim(memory: MemoryService):
 
     node = await memory.store.get_node(claim_id)
     assert node is not None
-    assert node["type"] in ("Claim", "Resolution")
-    assert node["source"] == "inference_agent"
+    assert "Statement" in node["_labels"]
 
 
 @pytest.mark.llm

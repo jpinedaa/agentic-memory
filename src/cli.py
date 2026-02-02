@@ -37,41 +37,41 @@ Anything else is recorded as an observation.
 async def _print_status(memory: MemoryAPI) -> None:  # pylint: disable=too-many-locals  # status display aggregates many store queries
     """Print a summary of the current graph state."""
     observations = await memory.get_recent_observations(limit=50)
-    claims = await memory.get_recent_claims(limit=50)
+    statements = await memory.get_recent_statements(limit=50)
     contradictions = await memory.get_unresolved_contradictions()
-    entities = await memory.get_entities()
+    concepts = await memory.get_concepts()
 
     print("\n--- Graph Status ---\n")
 
-    print(f"Entities ({len(entities)}):")
-    for e in entities:
-        print(f"  - {e.get('name', e['id'][:8])}")
+    print(f"Concepts ({len(concepts)}):")
+    for c in concepts:
+        kind = c.get("kind", "")
+        kind_str = f" [{kind}]" if kind else ""
+        print(f"  - {c.get('name', c['id'][:8])}{kind_str}")
 
     print(f"\nObservations ({len(observations)}):")
     for o in observations:
         raw = o.get("raw_content", "")
-        ts = o.get("timestamp", "")[:19]
-        src = o.get("source", "")
-        print(f"  [{ts}] ({src}) {raw}")
+        ts = str(o.get("created_at", ""))[:19]
+        print(f"  [{ts}] {raw}")
 
-    print(f"\nClaims ({len(claims)}):")
-    for c in claims:
-        subj = c.get("subject_text", "?")
-        pred = c.get("predicate_text", "?")
-        obj = c.get("object_text", "?")
-        conf = c.get("confidence", "?")
-        src = c.get("source", "")
-        node_type = c.get("type", "Claim")
-        label = "RESOLUTION" if node_type == "Resolution" else "claim"
-        print(f"  [{label}] {subj} {pred} {obj} (confidence: {conf}, source: {src})")
+    print(f"\nStatements ({len(statements)}):")
+    for s in statements:
+        subj = s.get("subject_name", "?")
+        pred = s.get("predicate", "?")
+        obj = s.get("object_name", "?")
+        conf = s.get("confidence", "?")
+        src = s.get("source", "")
+        neg = "NOT " if s.get("negated") else ""
+        print(f"  {subj} {neg}{pred} {obj} (confidence: {conf}, source: {src})")
 
     if contradictions:
         print(f"\nUnresolved Contradictions ({len(contradictions)}):")
-        for c1, c2 in contradictions:
-            o1 = c1.get("object_text", "?")
-            o2 = c2.get("object_text", "?")
-            subj = c1.get("subject_text", "?")
-            pred = c1.get("predicate_text", "?")
+        for s1, s2 in contradictions:
+            o1 = s1.get("object_name", "?")
+            o2 = s2.get("object_name", "?")
+            subj = s1.get("subject_name", "?")
+            pred = s1.get("predicate", "?")
             print(f"  {subj} {pred}: '{o1}' vs '{o2}'")
     else:
         print("\nNo unresolved contradictions.")

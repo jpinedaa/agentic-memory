@@ -22,10 +22,20 @@ async def test_extract_observation(translator: LLMTranslator):
     result = await translator.extract_observation(
         "user said they hate waking up early for meetings"
     )
-    assert len(result.entities) > 0
-    assert "user" in [e.lower() for e in result.entities]
-    assert len(result.extractions) > 0
+    assert len(result.concepts) > 0
+    concept_names = [c.name.lower() for c in result.concepts]
+    assert any("user" in n for n in concept_names)
+    assert len(result.statements) > 0
     assert len(result.topics) > 0
+
+
+async def test_extract_observation_concepts_have_kind(translator: LLMTranslator):
+    result = await translator.extract_observation(
+        "bitcoin is a peer-to-peer network"
+    )
+    assert len(result.concepts) > 0
+    for concept in result.concepts:
+        assert concept.kind in ("entity", "attribute", "value", "category", "action")
 
 
 async def test_parse_claim(translator: LLMTranslator):
@@ -40,10 +50,10 @@ async def test_parse_claim(translator: LLMTranslator):
 async def test_parse_claim_with_contradiction(translator: LLMTranslator):
     context = [
         {
-            "type": "Claim",
-            "subject_text": "user",
-            "predicate_text": "prefers",
-            "object_text": "morning meetings",
+            "node_kind": "statement",
+            "subject_name": "user",
+            "predicate": "prefers",
+            "object_name": "morning meetings",
             "confidence": 0.7,
         }
     ]
@@ -63,10 +73,10 @@ async def test_generate_query(translator: LLMTranslator):
 async def test_synthesize_response(translator: LLMTranslator):
     results = [
         {
-            "type": "Claim",
-            "subject_text": "user",
-            "predicate_text": "prefers",
-            "object_text": "afternoon meetings",
+            "node_kind": "statement",
+            "subject_name": "user",
+            "predicate": "prefers",
+            "object_name": "afternoon meetings",
             "confidence": 0.85,
             "source": "inference_agent",
         }

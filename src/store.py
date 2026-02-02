@@ -1,7 +1,8 @@
-"""Neo4j triple store wrapper.
+"""Neo4j knowledge graph store.
 
-Uses Option B from the design doc: properties for literal values,
-relationships for references between nodes.
+Uses proper Neo4j labels (:Concept, :Statement, :Observation, :Source)
+instead of a generic :Node label with type property. All knowledge is
+stored as reified Statements linking Concepts, with full provenance.
 """
 
 from __future__ import annotations
@@ -22,7 +23,7 @@ class StoreConfig:
 
 
 class TripleStore:
-    """Async Neo4j wrapper for the memory graph."""
+    """Async Neo4j wrapper for the knowledge graph."""
 
     def __init__(self, driver: AsyncDriver) -> None:
         self._driver = driver
@@ -35,22 +36,111 @@ class TripleStore:
             config.uri, auth=(config.username, config.password)
         )
         await driver.verify_connectivity()
-        return cls(driver)
+        store = cls(driver)
+        await store.ensure_indexes()
+        return store
 
     async def close(self) -> None:
         """Close the Neo4j driver connection."""
         await self._driver.close()
 
+    async def ensure_indexes(self) -> None:
+        """Create indexes and constraints for the knowledge graph schema."""
+        statements = [
+            "CREATE CONSTRAINT concept_id IF NOT EXISTS FOR (c:Concept) REQUIRE c.id IS UNIQUE",
+            "CREATE CONSTRAINT statement_id IF NOT EXISTS FOR (s:Statement) REQUIRE s.id IS UNIQUE",
+            "CREATE CONSTRAINT observation_id IF NOT EXISTS FOR (o:Observation) REQUIRE o.id IS UNIQUE",
+            "CREATE CONSTRAINT source_id IF NOT EXISTS FOR (s:Source) REQUIRE s.id IS UNIQUE",
+            "CREATE INDEX concept_name IF NOT EXISTS FOR (c:Concept) ON (c.name)",
+            "CREATE INDEX statement_predicate IF NOT EXISTS FOR (s:Statement) ON (s.predicate)",
+            "CREATE INDEX statement_created IF NOT EXISTS FOR (s:Statement) ON (s.created_at)",
+            "CREATE INDEX observation_created IF NOT EXISTS FOR (o:Observation) ON (o.created_at)",
+        ]
+        async with self._driver.session() as session:
+            for stmt in statements:
+                await session.run(stmt)
+
     # -- writes --
 
-    async def create_node(self, node_id: str, properties: dict[str, Any]) -> None:
-        """Create a node with the given id and properties."""
-        props = {**properties, "id": node_id}
+    async def create_concept(
+        self,
+        node_id: str,
+        name: str,
+        kind: str = "",
+        aliases: list[str] | None = None,
+    ) -> None:
+        """Create a Concept node."""
         async with self._driver.session() as session:
             await session.run(
-                "CREATE (n:Node $props)",
-                props=props,
+                "CREATE (c:Concept {id: $id, name: $name, kind: $kind, aliases: $aliases, created_at: datetime()})",
+                id=node_id,
+                name=name,
+                kind=kind,
+                aliases=aliases or [],
             )
+
+    async def get_or_create_concept(
+        self, name: str, node_id: str, kind: str = ""
+    ) -> str:
+        """Get an existing concept by name (case-insensitive), or create one. Returns the concept id."""
+        existing = await self.find_concept_by_name(name)
+        if existing:
+            return existing["id"]
+        await self.create_concept(node_id, name, kind=kind)
+        return node_id
+
+    async def create_statement(
+        self,
+        node_id: str,
+        predicate: str,
+        confidence: float,
+        negated: bool = False,
+    ) -> None:
+        """Create a Statement node (reified triple)."""
+        async with self._driver.session() as session:
+            await session.run(
+                "CREATE (s:Statement {id: $id, predicate: $predicate, confidence: $confidence, negated: $negated, created_at: datetime()})",
+                id=node_id,
+                predicate=predicate,
+                confidence=confidence,
+                negated=negated,
+            )
+
+    async def create_observation(
+        self,
+        node_id: str,
+        raw_content: str,
+        topics: list[str] | None = None,
+    ) -> None:
+        """Create an Observation node."""
+        async with self._driver.session() as session:
+            await session.run(
+                "CREATE (o:Observation {id: $id, raw_content: $raw_content, topics: $topics, created_at: datetime()})",
+                id=node_id,
+                raw_content=raw_content,
+                topics=topics or [],
+            )
+
+    async def get_or_create_source(self, name: str, kind: str = "agent") -> str:
+        """Get an existing source by name, or create one. Returns the source id."""
+        async with self._driver.session() as session:
+            result = await session.run(
+                "MATCH (s:Source {name: $name}) RETURN s.id AS id LIMIT 1",
+                name=name,
+            )
+            record = await result.single()
+            if record:
+                return record["id"]
+
+            import uuid
+            source_id = str(uuid.uuid4())
+            await session.run(
+                "CREATE (s:Source {id: $id, name: $name, kind: $kind, created_at: datetime()})",
+                id=source_id,
+                name=name,
+                kind=kind,
+            )
+            return source_id
 
     async def create_relationship(
         self,
@@ -59,15 +149,16 @@ class TripleStore:
         to_id: str,
         properties: dict[str, Any] | None = None,
     ) -> None:
-        """Create a typed relationship between two existing nodes."""
-        query = (
-            "MATCH (a:Node {id: $from_id}), (b:Node {id: $to_id}) "
-            f"CREATE (a)-[r:{rel_type}]->(b) "
-        )
+        """Create a typed relationship between two existing nodes (any label)."""
         if properties:
             query = (
-                "MATCH (a:Node {id: $from_id}), (b:Node {id: $to_id}) "
-                f"CREATE (a)-[r:{rel_type} $props]->(b) "
+                "MATCH (a {id: $from_id}), (b {id: $to_id}) "
+                f"CREATE (a)-[r:{rel_type} $props]->(b)"
+            )
+        else:
+            query = (
+                "MATCH (a {id: $from_id}), (b {id: $to_id}) "
+                f"CREATE (a)-[r:{rel_type}]->(b)"
             )
         async with self._driver.session() as session:
             await session.run(
@@ -80,81 +171,74 @@ class TripleStore:
     # -- reads --
 
     async def get_node(self, node_id: str) -> dict[str, Any] | None:
-        """Fetch a node by id, returning its properties."""
+        """Fetch any node by id, returning its properties and labels."""
         async with self._driver.session() as session:
             result = await session.run(
-                "MATCH (n:Node {id: $id}) RETURN n",
+                "MATCH (n {id: $id}) RETURN n, labels(n) AS labels",
                 id=node_id,
             )
             record = await result.single()
             if record is None:
                 return None
-            return dict(record["n"])
+            props = dict(record["n"])
+            props["_labels"] = record["labels"]
+            return props
 
-    async def query_by_type(self, node_type: str) -> list[dict[str, Any]]:
-        """Get all nodes of a given type."""
-        async with self._driver.session() as session:
-            result = await session.run(
-                "MATCH (n:Node {type: $type}) RETURN n ORDER BY n.timestamp DESC",
-                type=node_type,
-            )
-            return [dict(record["n"]) async for record in result]
-
-    async def get_related(
-        self, node_id: str, rel_type: str | None = None
-    ) -> list[dict[str, Any]]:
-        """Get nodes related to the given node, optionally filtered by relationship type."""
-        if rel_type:
-            query = (
-                f"MATCH (n:Node {{id: $id}})-[:{rel_type}]->(target:Node) "
-                "RETURN target"
-            )
-        else:
-            query = (
-                "MATCH (n:Node {id: $id})-[r]->(target:Node) "
-                "RETURN target, type(r) AS rel_type"
-            )
-        async with self._driver.session() as session:
-            result = await session.run(query, id=node_id)
-            return [dict(record["target"]) async for record in result]
-
-    async def find_claims_about(self, entity_id: str) -> list[dict[str, Any]]:
-        """Get the current resolved state for an entity.
-
-        Returns claims/resolutions that haven't been superseded,
-        ordered by confidence (desc) then timestamp (desc).
-        """
+    async def find_concept_by_name(self, name: str) -> dict[str, Any] | None:
+        """Find a concept by name (case-insensitive) or alias."""
         query = """
-            MATCH (c:Node)-[:SUBJECT]->(e:Node {id: $entity_id})
-            WHERE c.type IN ['Claim', 'Resolution']
-            AND NOT EXISTS {
-                MATCH (newer:Node)-[:SUPERSEDES]->(c)
-            }
+            MATCH (c:Concept)
+            WHERE toLower(c.name) = toLower($name)
+               OR any(a IN c.aliases WHERE toLower(a) = toLower($name))
             RETURN c
-            ORDER BY c.confidence DESC, c.timestamp DESC
+            LIMIT 1
         """
         async with self._driver.session() as session:
-            result = await session.run(query, entity_id=entity_id)
-            return [dict(record["c"]) async for record in result]
+            result = await session.run(query, name=name)
+            record = await result.single()
+            if record is None:
+                return None
+            return dict(record["c"])
+
+    async def find_statements_about(self, concept_id: str) -> list[dict[str, Any]]:
+        """Get current statements about a concept (as subject or object, excluding superseded)."""
+        query = """
+            MATCH (s:Statement)-[:ABOUT_SUBJECT|ABOUT_OBJECT]->(c:Concept {id: $concept_id})
+            WHERE NOT EXISTS {
+                MATCH (:Statement)-[:SUPERSEDES]->(s)
+            }
+            OPTIONAL MATCH (s)-[:ABOUT_SUBJECT]->(subj:Concept)
+            OPTIONAL MATCH (s)-[:ABOUT_OBJECT]->(obj:Concept)
+            RETURN s {.*, subject_name: subj.name, object_name: obj.name}
+            ORDER BY s.confidence DESC, s.created_at DESC
+        """
+        async with self._driver.session() as session:
+            result = await session.run(query, concept_id=concept_id)
+            return [dict(record["s"]) async for record in result]
 
     async def find_unresolved_contradictions(
         self,
     ) -> list[tuple[dict[str, Any], dict[str, Any]]]:
-        """Find pairs of claims that contradict each other and haven't been resolved."""
+        """Find pairs of statements that contradict each other and haven't been resolved."""
         query = """
-            MATCH (c1:Node)-[:CONTRADICTS]->(c2:Node)
+            MATCH (s1:Statement)-[:CONTRADICTS]->(s2:Statement)
             WHERE NOT EXISTS {
-                MATCH (r:Node {type: 'Resolution'})-[:SUPERSEDES]->(c1)
+                MATCH (:Statement)-[:SUPERSEDES]->(s1)
             }
             AND NOT EXISTS {
-                MATCH (r:Node {type: 'Resolution'})-[:SUPERSEDES]->(c2)
+                MATCH (:Statement)-[:SUPERSEDES]->(s2)
             }
-            RETURN c1, c2
+            OPTIONAL MATCH (s1)-[:ABOUT_SUBJECT]->(subj1:Concept)
+            OPTIONAL MATCH (s1)-[:ABOUT_OBJECT]->(obj1:Concept)
+            OPTIONAL MATCH (s2)-[:ABOUT_SUBJECT]->(subj2:Concept)
+            OPTIONAL MATCH (s2)-[:ABOUT_OBJECT]->(obj2:Concept)
+            RETURN s1 {.*, subject_name: subj1.name, object_name: obj1.name},
+                   s2 {.*, subject_name: subj2.name, object_name: obj2.name}
         """
         async with self._driver.session() as session:
             result = await session.run(query)
             return [
-                (dict(record["c1"]), dict(record["c2"]))
+                (dict(record["s1"]), dict(record["s2"]))
                 async for record in result
             ]
 
@@ -163,56 +247,47 @@ class TripleStore:
     ) -> list[dict[str, Any]]:
         """Get recent observations, newest first."""
         query = """
-            MATCH (n:Node {type: 'Observation'})
-            RETURN n
-            ORDER BY n.timestamp DESC
+            MATCH (o:Observation)
+            RETURN o
+            ORDER BY o.created_at DESC
             LIMIT $limit
         """
         async with self._driver.session() as session:
             result = await session.run(query, limit=limit)
-            return [dict(record["n"]) async for record in result]
+            return [dict(record["o"]) async for record in result]
 
-    async def find_recent_claims(self, limit: int = 20) -> list[dict[str, Any]]:
-        """Get recent claims, newest first."""
+    async def find_recent_statements(self, limit: int = 20) -> list[dict[str, Any]]:
+        """Get recent statements with their subject and object names, newest first."""
         query = """
-            MATCH (n:Node {type: 'Claim'})
-            RETURN n
-            ORDER BY n.timestamp DESC
+            MATCH (s:Statement)
+            OPTIONAL MATCH (s)-[:ABOUT_SUBJECT]->(subj:Concept)
+            OPTIONAL MATCH (s)-[:ABOUT_OBJECT]->(obj:Concept)
+            OPTIONAL MATCH (s)-[:ASSERTED_BY]->(src:Source)
+            RETURN s {.*, subject_name: subj.name, object_name: obj.name, source: src.name}
+            ORDER BY s.created_at DESC
             LIMIT $limit
         """
         async with self._driver.session() as session:
             result = await session.run(query, limit=limit)
-            return [dict(record["n"]) async for record in result]
+            return [dict(record["s"]) async for record in result]
 
-    async def find_entity_by_name(self, name: str) -> dict[str, Any] | None:
-        """Find an entity node by its name property (case-insensitive)."""
+    async def get_all_concepts(self) -> list[dict[str, Any]]:
+        """Get all concept nodes."""
         query = """
-            MATCH (n:Node {type: 'Entity'})
-            WHERE toLower(n.name) = toLower($name)
-            RETURN n
-            LIMIT 1
+            MATCH (c:Concept)
+            RETURN c
+            ORDER BY c.name
         """
         async with self._driver.session() as session:
-            result = await session.run(query, name=name)
-            record = await result.single()
-            if record is None:
-                return None
-            return dict(record["n"])
-
-    async def get_or_create_entity(self, name: str, node_id: str) -> str:
-        """Get an existing entity by name, or create one. Returns the entity id."""
-        existing = await self.find_entity_by_name(name)
-        if existing:
-            return existing["id"]
-        await self.create_node(node_id, {"type": "Entity", "name": name})
-        return node_id
+            result = await session.run(query)
+            return [dict(record["c"]) async for record in result]
 
     async def get_all_relationships(
         self, limit: int = 500
     ) -> list[dict[str, Any]]:
         """Get all relationships for graph visualization."""
         query = """
-            MATCH (a:Node)-[r]->(b:Node)
+            MATCH (a)-[r]->(b)
             RETURN a.id AS source, b.id AS target, type(r) AS type
             LIMIT $limit
         """

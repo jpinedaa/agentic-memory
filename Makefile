@@ -1,4 +1,4 @@
-.PHONY: help dev test test-unit test-e2e docker-build docker-up docker-down docker-logs clean install lint
+.PHONY: help dev test test-all test-unit docker-build docker-up docker-down docker-logs clean install lint
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
@@ -9,9 +9,9 @@ install: ## Install dependencies in venv
 	python3 -m venv .venv
 	.venv/bin/pip install -e ".[dev]"
 
-dev: ## Run dev mode (all nodes in-process, needs Neo4j)
+dev: ## Run dev mode (all nodes in-process, starts Neo4j)
 	docker compose up neo4j -d
-	@echo "Waiting for Neo4j Bolt to be ready..."
+	@echo "Waiting for Neo4j..."
 	@for i in $$(seq 1 30); do \
 		docker compose exec neo4j cypher-shell -u neo4j -p memory-system "RETURN 1" >/dev/null 2>&1 && break; \
 		sleep 2; \
@@ -34,7 +34,7 @@ dev-cli: ## Run a CLI node locally (bootstrap to localhost:9000)
 
 debug-agents: ## Run dev mode with DEBUG logging for agents, LLM, and prompts
 	docker compose up neo4j -d
-	@echo "Waiting for Neo4j Bolt to be ready..."
+	@echo "Waiting for Neo4j..."
 	@for i in $$(seq 1 30); do \
 		docker compose exec neo4j cypher-shell -u neo4j -p memory-system "RETURN 1" >/dev/null 2>&1 && break; \
 		sleep 2; \
@@ -42,18 +42,26 @@ debug-agents: ## Run dev mode with DEBUG logging for agents, LLM, and prompts
 	LOG_CONFIG=logging.debug-agents.json .venv/bin/python main.py
 
 # ── Testing ─────────────────────────────────────────────────────────
+#
+# Tests auto-skip based on what's available:
+#   - No Neo4j → store/interface/integration tests skipped
+#   - No ANTHROPIC_API_KEY → LLM tests skipped
+#   - Just run `make test` and it does the right thing
 
-test: ## Run all tests that don't need Neo4j or API key
-	.venv/bin/python -m pytest tests/ -v -m "not llm" --ignore=tests/test_store.py --ignore=tests/test_interfaces.py --ignore=tests/test_integration.py
-
-test-unit: ## Run P2P and prompt unit tests (no external deps)
-	.venv/bin/python -m pytest tests/test_p2p.py tests/test_prompts.py -v
-
-test-store: ## Run store tests (needs Neo4j)
-	.venv/bin/python -m pytest tests/test_store.py -v
-
-test-all: ## Run all tests (needs Neo4j + API key)
+test: ## Run all tests (auto-skips if Neo4j or API key missing)
 	.venv/bin/python -m pytest tests/ -v
+
+test-all: ## Start Neo4j, then run all tests (still needs API key for LLM tests)
+	docker compose up neo4j -d
+	@echo "Waiting for Neo4j..."
+	@for i in $$(seq 1 30); do \
+		docker compose exec neo4j cypher-shell -u neo4j -p memory-system "RETURN 1" >/dev/null 2>&1 && break; \
+		sleep 2; \
+	done
+	.venv/bin/python -m pytest tests/ -v
+
+test-unit: ## Run only unit tests (no Neo4j, no API key needed)
+	.venv/bin/python -m pytest tests/test_p2p.py tests/test_prompts.py -v
 
 test-e2e: ## Run end-to-end tests in Docker (full stack)
 	docker compose -f docker-compose.yml -f docker-compose.test.yml up --build --abort-on-container-exit --exit-code-from test-runner

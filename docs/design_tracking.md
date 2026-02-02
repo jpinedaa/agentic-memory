@@ -90,105 +90,55 @@ The fundamental unit of storage:
 (subject, predicate, object)
 ```
 
-All three components are strings. The database assigns no special meaning to any value.
+Triples are **reified** as Statement nodes with edges to Concept nodes, enabling metadata (confidence, provenance, negation) on every assertion.
 
-### 3.2 Node Identity
+### 3.2 Neo4j Labels
 
-Nodes are identified by UUID strings. Generated at write time.
+The graph uses four distinct Neo4j labels (proper labels, not `:Node` with a type property):
 
-```
-subject:   "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
-predicate: "type"
-object:    "Claim"
-```
+| Label | Purpose | Key Properties |
+|-------|---------|----------------|
+| `:Concept` | Any thing, idea, category, or value | `id`, `name`, `kind`, `aliases[]`, `created_at` |
+| `:Statement` | A reified triple with metadata | `id`, `predicate`, `confidence`, `negated`, `created_at` |
+| `:Observation` | Raw input from external world | `id`, `raw_content`, `topics[]`, `created_at` |
+| `:Source` | Agent, user, or system that produced knowledge | `id`, `name`, `kind`, `created_at` |
 
-### 3.3 Conventions (Not Schema)
+### 3.3 Relationships
 
-The database is schema-less. These are conventions that adapters and agents agree to follow:
+| Relationship | From → To | Purpose |
+|---|---|---|
+| `ABOUT_SUBJECT` | Statement → Concept | Subject of the statement |
+| `ABOUT_OBJECT` | Statement → Concept | Object/value of the statement |
+| `DERIVED_FROM` | Statement → Observation or Statement | Provenance chain |
+| `ASSERTED_BY` | Statement → Source | Who made this assertion |
+| `SUPERSEDES` | Statement → Statement | Resolution (newer replaces older) |
+| `CONTRADICTS` | Statement → Statement | Conflicting statements |
+| `MENTIONS` | Observation → Concept | Concepts in the observation |
+| `RECORDED_BY` | Observation → Source | Who recorded this |
+| `RELATED_TO` | Concept → Concept | Decomposition/hierarchy (property: `relation`) |
 
-#### Node Types
-
-| Type | Created By | Meaning |
-|------|-----------|---------|
-| `Observation` | Adapters only | Raw perception from external world |
-| `Claim` | Agents only | Internal assertion or inference |
-| `Entity` | Either | A thing being described (user, object, concept) |
-| `Resolution` | Agents only | A claim that resolves contradicting claims |
-
-#### Reserved Predicates
-
-| Predicate | Domain | Range | Meaning |
-|-----------|--------|-------|---------|
-| `type` | Node | String | Node classification |
-| `source` | Node | String | Who/what created this node |
-| `timestamp` | Node | ISO8601 | When created |
-| `basis` | Claim | Node ID | Evidential link (what this is based on) |
-| `confidence` | Claim | Float 0-1 | Certainty score |
-| `supersedes` | Claim | Node ID | Replaces previous node |
-| `contradicts` | Claim | Node ID | In tension with another claim |
-| `raw_content` | Observation | String | Original unprocessed input |
-| `subject` | Claim/Obs | Node ID | What entity this is about |
-| `predicate` | Claim/Obs | String | Relationship or attribute |
-| `object` | Claim/Obs | String/Node ID | Value or target |
-
-#### Example: Observation
+### 3.4 Example
 
 ```
-(obs_123, type, "Observation")
-(obs_123, source, "chat_interface")
-(obs_123, timestamp, "2024-01-28T10:30:00Z")
-(obs_123, raw_content, "user said: I hate early meetings")
-(obs_123, subject, entity_user_456)
-(obs_123, predicate, "expressed")
-(obs_123, object, "dislike of early meetings")
+Input: "bitcoin is a peer-to-peer network"
+
+(:Observation {raw_content: "bitcoin is a peer-to-peer network"})
+  ├──MENTIONS──▶ (:Concept {name: "bitcoin", kind: "entity"})
+  ├──MENTIONS──▶ (:Concept {name: "peer-to-peer network", kind: "category"})
+  └──RECORDED_BY──▶ (:Source {name: "cli_user", kind: "user"})
+
+(:Statement {predicate: "is", confidence: 1.0})
+  ├──ABOUT_SUBJECT──▶ (:Concept {name: "bitcoin"})
+  ├──ABOUT_OBJECT──▶ (:Concept {name: "peer-to-peer network"})
+  ├──DERIVED_FROM──▶ (the Observation)
+  └──ASSERTED_BY──▶ (:Source {name: "cli_user"})
+
+(:Concept {name: "peer-to-peer network"})
+  ├──RELATED_TO {relation: "is_a"}──▶ (:Concept {name: "network"})
+  └──RELATED_TO {relation: "has_property"}──▶ (:Concept {name: "peer-to-peer"})
 ```
 
-#### Example: Claim
-
-```
-(claim_789, type, "Claim")
-(claim_789, source, "inference_agent")
-(claim_789, timestamp, "2024-01-28T10:30:05Z")
-(claim_789, basis, obs_123)
-(claim_789, subject, entity_user_456)
-(claim_789, predicate, "prefers")
-(claim_789, object, "afternoon meetings")
-(claim_789, confidence, 0.8)
-```
-
-#### Example: Contradiction and Resolution
-
-```
-# Two conflicting claims exist
-(claim_789, predicate, "prefers")
-(claim_789, object, "afternoon meetings")
-(claim_789, confidence, 0.8)
-
-(claim_800, predicate, "prefers")
-(claim_800, object, "morning meetings")
-(claim_800, confidence, 0.6)
-
-# Agent notices contradiction
-(claim_810, type, "Claim")
-(claim_810, source, "validator_agent")
-(claim_810, basis, claim_789)
-(claim_810, basis, claim_800)
-(claim_810, predicate, "contradicts")
-(claim_810, subject, claim_789)
-(claim_810, object, claim_800)
-
-# Later, resolution agent resolves
-(resolution_820, type, "Resolution")
-(resolution_820, source, "resolution_agent")
-(resolution_820, basis, claim_789)
-(resolution_820, basis, claim_800)
-(resolution_820, supersedes, claim_800)
-(resolution_820, subject, entity_user_456)
-(resolution_820, predicate, "prefers")
-(resolution_820, object, "afternoon meetings")
-(resolution_820, confidence, 0.85)
-(resolution_820, reasoning, "claim_789 has higher confidence and more recent basis")
-```
+See [Knowledge Representation](knowledge_representation.md) for the full model.
 
 ---
 
@@ -223,11 +173,11 @@ validator_agent = AgentInterface(source="validator_agent")
 **Purpose**: Record a perception from the external world
 
 **Behavior**:
-1. LLM extracts structured content (entities, relationships) from text
-2. Creates Observation node with raw_content, source, timestamp, topics
-3. Creates Entity nodes for each mentioned entity; links via SUBJECT
-4. Creates entity-to-entity edges from extracted triples (knowledge graph structure)
-5. No Claim nodes — claims are exclusively the inference agent's job
+1. LLM extracts concepts (with kind, aliases, decomposition) and statements (with confidence, negation)
+2. Creates Source node (get_or_create), Observation node, links via RECORDED_BY
+3. Creates Concept nodes for each mentioned concept; links via MENTIONS
+4. For compound concepts, decomposes via RELATED_TO edges to sub-concepts
+5. Creates Statement nodes (reified triples) with ABOUT_SUBJECT, ABOUT_OBJECT, DERIVED_FROM, ASSERTED_BY
 
 **Example**:
 ```python
@@ -327,61 +277,42 @@ Across sources, no global ordering is guaranteed or required. Causality is captu
 
 ### 6.1 Neo4j Implementation
 
-Neo4j is used as the triple store. While Neo4j has a property graph model (nodes with labels and properties, typed relationships), we use it in a minimal way:
+Neo4j is used with proper labels (`:Concept`, `:Statement`, `:Observation`, `:Source`) and reified triples. All assertions are Statement nodes with edges to their subject/object Concepts.
 
-**Option A: Pure Triple Representation**
 ```cypher
-// Every triple is a relationship between two nodes
-CREATE (s:Node {id: $subject})-[:TRIPLE {predicate: $predicate}]->(o:Node {id: $object})
+// Create a statement (reified triple)
+CREATE (s:Statement {id: $id, predicate: $pred, confidence: $conf, negated: false, created_at: datetime()})
+
+// Link to subject and object concepts
+MATCH (s:Statement {id: $stmt_id}), (c:Concept {id: $concept_id})
+CREATE (s)-[:ABOUT_SUBJECT]->(c)
 ```
 
-**Option B: Property-Based for Literals**
-```cypher
-// Node with properties for literal values
-CREATE (n:Node {
-  id: $id,
-  type: "Claim",
-  source: "agent_a",
-  timestamp: datetime(),
-  confidence: 0.8
-})
-
-// Relationships for references to other nodes
-MATCH (n:Node {id: $claim_id}), (o:Node {id: $observation_id})
-CREATE (n)-[:BASIS]->(o)
-```
-
-**Recommendation**: Option B for prototype. Cleaner queries, better performance for property lookups.
+Indexes and uniqueness constraints are created automatically by `store.ensure_indexes()`.
 
 ### 6.2 Core Queries
 
 ```cypher
-// Get all triples about a node
-MATCH (n:Node {id: $id})-[r]->(target)
-RETURN n, r, target
+// Get all statements about a concept (excluding superseded)
+MATCH (s:Statement)-[:ABOUT_SUBJECT|ABOUT_OBJECT]->(c:Concept {id: $concept_id})
+WHERE NOT EXISTS { MATCH (:Statement)-[:SUPERSEDES]->(s) }
+OPTIONAL MATCH (s)-[:ABOUT_SUBJECT]->(subj:Concept)
+OPTIONAL MATCH (s)-[:ABOUT_OBJECT]->(obj:Concept)
+RETURN subj.name, s.predicate, obj.name, s.confidence
 
-// Get all claims based on an observation
-MATCH (c:Node {type: "Claim"})-[:BASIS]->(o:Node {id: $obs_id})
-RETURN c
+// Get all statements derived from an observation
+MATCH (s:Statement)-[:DERIVED_FROM]->(o:Observation {id: $obs_id})
+RETURN s
 
 // Get all unresolved contradictions
-MATCH (c1:Node {type: "Claim"})-[:CONTRADICTS]->(c2:Node {type: "Claim"})
-WHERE NOT EXISTS {
-  MATCH (r:Node {type: "Resolution"})-[:SUPERSEDES]->(c1)
-}
-AND NOT EXISTS {
-  MATCH (r:Node {type: "Resolution"})-[:SUPERSEDES]->(c2)
-}
-RETURN c1, c2
+MATCH (s1:Statement)-[:CONTRADICTS]->(s2:Statement)
+WHERE NOT EXISTS { MATCH (:Statement)-[:SUPERSEDES]->(s1) }
+AND NOT EXISTS { MATCH (:Statement)-[:SUPERSEDES]->(s2) }
+RETURN s1, s2
 
-// Get current resolved state for an entity
-MATCH (c:Node)-[:SUBJECT]->(e:Node {id: $entity_id})
-WHERE c.type IN ["Claim", "Resolution"]
-AND NOT EXISTS {
-  MATCH (newer:Node)-[:SUPERSEDES]->(c)
-}
-RETURN c
-ORDER BY c.confidence DESC, c.timestamp DESC
+// Concept decomposition
+MATCH (c:Concept)-[r:RELATED_TO]->(sub:Concept)
+RETURN c.name, r.relation, sub.name
 ```
 
 ---
@@ -440,17 +371,18 @@ For REMEMBER operations:
 ```
 Input: "user said they hate waking up early for meetings"
 
-Output:
+Output (ObservationData):
 {
-  "id": "obs_uuid_here",
-  "type": "Observation",
-  "raw_content": "user said they hate waking up early for meetings",
-  "extractions": [
-    {"subject": "user", "predicate": "expressed", "object": "dislike of early meetings"},
-    {"subject": "user", "predicate": "mentioned", "object": "meetings"}
+  "concepts": [
+    {"name": "user", "kind": "entity"},
+    {"name": "early meetings", "kind": "value", "components": [
+      {"name": "meetings", "relation": "head_noun"},
+      {"name": "early", "relation": "modifier"}
+    ]}
   ],
-  "entities": ["user"],
-  "sentiment": "negative",
+  "statements": [
+    {"subject": "user", "predicate": "hates", "object": "early meetings", "confidence": 0.9}
+  ],
   "topics": ["meetings", "schedule", "morning"]
 }
 ```
@@ -462,15 +394,14 @@ Context: [obs_123 about hating early meetings]
 
 Output:
 {
-  "id": "claim_uuid_here",
-  "type": "Claim",
-  "basis": ["obs_123"],
   "subject": "user",
   "predicate": "prefers",
   "object": "afternoon meetings",
   "confidence": 0.8,
-  "supersedes": null,
-  "contradicts": null
+  "negated": false,
+  "basis_descriptions": ["user said they hate waking up early for meetings"],
+  "supersedes_description": null,
+  "contradicts_description": null
 }
 ```
 
@@ -700,9 +631,9 @@ memory-system/
 
 ---
 
-*Document version: 0.6*
-*Last updated: 2026-01-29*
-*Status: v0.3 P2P architecture with UI bridge implemented. Knowledge representation documented separately.*
+*Document version: 0.7*
+*Last updated: 2026-02-02*
+*Status: v0.3 P2P architecture with UI bridge. Knowledge representation redesigned: proper Neo4j labels (:Concept, :Statement, :Observation, :Source), reified triples, concept decomposition. See knowledge_representation.md.*
 
 ---
 
@@ -776,22 +707,33 @@ MemoryService.observe() (src/interfaces.py)
     ▼
 LLMTranslator.extract_observation() (src/llm.py)
     │ Claude tool_use → structured ObservationData:
-    │   entities: ["user"]
-    │   extractions: [{subject: "user", predicate: "prefers", object: "morning meetings"}]
+    │   concepts: [{name: "user", kind: "entity"},
+    │              {name: "morning meetings", kind: "value"}]
+    │   statements: [{subject: "user", predicate: "prefers",
+    │                 object: "morning meetings", confidence: 0.9}]
     │   topics: ["meetings", "schedule"]
     │
     ▼ (back in MemoryService.observe)
-    │ 2. store.create_node(obs_id, {type: "Observation", raw_content: ...})
-    │ 3. store.get_or_create_entity("user") → entity node
-    │ 4. store.create_relationship(obs_id, "SUBJECT", entity_id)
-    │ 5. For each extraction: entity-to-entity edge only
-    │    store.get_or_create_entity(subject) → subj_entity
-    │    store.get_or_create_entity(object) → obj_entity
-    │    store.create_relationship(subj_entity, "PREFERS", obj_entity)
+    │ 2. store.get_or_create_source("cli_user", kind="user")
+    │ 3. store.create_observation(obs_id, raw_content=..., topics=...)
+    │ 4. store.create_relationship(obs_id, "RECORDED_BY", source_id)
+    │ 5. For each concept: store.get_or_create_concept(name, id, kind)
+    │    store.create_relationship(obs_id, "MENTIONS", concept_id)
+    │    (decompose compound concepts via RELATED_TO)
+    │ 6. For each statement: store.create_statement(stmt_id, predicate, confidence)
+    │    store.create_relationship(stmt_id, "ABOUT_SUBJECT", subj_id)
+    │    store.create_relationship(stmt_id, "ABOUT_OBJECT", obj_id)
+    │    store.create_relationship(stmt_id, "DERIVED_FROM", obs_id)
+    │    store.create_relationship(stmt_id, "ASSERTED_BY", source_id)
     ▼
 Neo4j Graph:
-    (obs_abc) --SUBJECT--> (entity_user)
-    (entity_user) --PREFERS--> (entity_morning_meetings)
+    (:Observation) --RECORDED_BY--> (:Source {name: "cli_user"})
+    (:Observation) --MENTIONS--> (:Concept {name: "user"})
+    (:Observation) --MENTIONS--> (:Concept {name: "morning meetings"})
+    (:Statement {predicate: "prefers"}) --ABOUT_SUBJECT--> (:Concept {name: "user"})
+    (:Statement {predicate: "prefers"}) --ABOUT_OBJECT--> (:Concept {name: "morning meetings"})
+    (:Statement) --DERIVED_FROM--> (:Observation)
+    (:Statement) --ASSERTED_BY--> (:Source)
 ```
 
 #### Inference Flow (agent poll loop)
@@ -814,17 +756,21 @@ MemoryService.infer(raw_content) → LLMTranslator.infer() (src/llm.py)
     │ memory.claim("User prefers morning meetings", source="inference_agent")
     ▼
 MemoryService.claim() (src/interfaces.py)
-    │ 1. Gathers recent claims + observations as context
+    │ 1. Gathers recent statements + observations as context
     │ 2. llm.parse_claim(text, context) → ClaimData:
     │      subject: "user", predicate: "prefers", object: "morning meetings"
     │      confidence: 0.9, basis_descriptions: [...]
-    │ 3. store.create_node(claim_id, {type: "Claim", confidence: 0.9, ...})
-    │ 4. store.create_relationship(claim_id, "SUBJECT", entity_id)
-    │ 5. If basis found: store.create_relationship(claim_id, "BASIS", basis_id)
+    │ 3. store.get_or_create_source("inference_agent", kind="agent")
+    │ 4. store.create_statement(stmt_id, predicate, confidence, negated)
+    │ 5. store.get_or_create_concept(subject/object)
+    │ 6. ABOUT_SUBJECT, ABOUT_OBJECT, ASSERTED_BY edges
+    │ 7. If basis found: store.create_relationship(stmt_id, "DERIVED_FROM", basis_id)
     ▼
 Neo4j Graph (new):
-    (claim_123) --SUBJECT--> (entity_user)
-    (claim_123) --BASIS--> (obs_abc)
+    (:Statement {predicate: "prefers"}) --ABOUT_SUBJECT--> (:Concept {name: "user"})
+    (:Statement) --ABOUT_OBJECT--> (:Concept {name: "morning meetings"})
+    (:Statement) --DERIVED_FROM--> (:Observation)
+    (:Statement) --ASSERTED_BY--> (:Source {name: "inference_agent"})
 ```
 
 #### Contradiction Detection Flow
@@ -834,9 +780,9 @@ ValidatorAgent.run() — polls every 8 seconds
     │
     ▼
 ValidatorAgent.process() (src/agents/validator.py)
-    │ 1. store.find_recent_claims(limit=20)
-    │ 2. Group by subject_text, then by predicate_text
-    │ 3. Within each group, compare object_text values
+    │ 1. memory.get_recent_statements(limit=20)
+    │ 2. Group by subject_name, then by predicate
+    │ 3. Within each group, compare object_name values
     │
     │ Found: "user prefers morning meetings" vs "user prefers afternoon meetings"
     │
@@ -1023,9 +969,9 @@ class MemoryAPI(Protocol):
     async def claim(self, text: str, source: str) -> str: ...
     async def remember(self, query: str) -> str: ...
     async def get_recent_observations(self, limit: int = 10) -> list[dict]: ...
-    async def get_recent_claims(self, limit: int = 20) -> list[dict]: ...
+    async def get_recent_statements(self, limit: int = 20) -> list[dict]: ...
     async def get_unresolved_contradictions(self) -> list[tuple[dict, dict]]: ...
-    async def get_entities(self) -> list[dict]: ...
+    async def get_concepts(self) -> list[dict]: ...
     async def infer(self, observation_text: str) -> str | None: ...
     async def clear(self) -> None: ...
 ```

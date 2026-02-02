@@ -177,15 +177,17 @@ def create_ui_bridge(node: PeerNode, store: TripleStore) -> APIRouter:
         try:
             # Get all nodes
             nodes_raw = await store.raw_query(
-                "MATCH (n:Node) RETURN n LIMIT $limit",
+                "MATCH (n) WHERE n.id IS NOT NULL RETURN n, labels(n) AS labels LIMIT $limit",
                 {"limit": limit},
             )
             nodes = []
             for record in nodes_raw:
                 n = dict(record["n"])
+                labels = record.get("labels", [])
+                node_type = labels[0] if labels else "Unknown"
                 nodes.append({
                     "id": n.get("id", ""),
-                    "type": n.get("type", "Unknown"),
+                    "type": node_type,
                     "data": n,
                 })
 
@@ -233,21 +235,19 @@ def create_ui_bridge(node: PeerNode, store: TripleStore) -> APIRouter:
 
         try:
             obs_count = await store.raw_query(
-                "MATCH (n:Node {type: 'Observation'}) RETURN count(n) AS c"
+                "MATCH (n:Observation) RETURN count(n) AS c"
             )
-            claim_count = await store.raw_query(
-                "MATCH (n:Node {type: 'Claim'}) RETURN count(n) AS c"
+            stmt_count = await store.raw_query(
+                "MATCH (n:Statement) RETURN count(n) AS c"
             )
-            entity_count = await store.raw_query(
-                "MATCH (n:Node {type: 'Entity'}) RETURN count(n) AS c"
+            concept_count = await store.raw_query(
+                "MATCH (n:Concept) RETURN count(n) AS c"
             )
             rel_count = await store.raw_query(
                 "MATCH ()-[r]->() RETURN count(r) AS c"
             )
-            # Count entity-to-entity edges (knowledge triples, excluding system edges)
-            triple_count = await store.raw_query(
-                "MATCH (a:Node {type: 'Entity'})-[r]->(b:Node {type: 'Entity'}) "
-                "RETURN count(r) AS c"
+            source_count = await store.raw_query(
+                "MATCH (n:Source) RETURN count(n) AS c"
             )
 
             return {
@@ -261,18 +261,14 @@ def create_ui_bridge(node: PeerNode, store: TripleStore) -> APIRouter:
                 },
                 "knowledge": {
                     "observations": obs_count[0]["c"] if obs_count else 0,
-                    "claims": claim_count[0]["c"] if claim_count else 0,
-                    "entities": entity_count[0]["c"] if entity_count else 0,
-                    "triples": triple_count[0]["c"] if triple_count else 0,
+                    "statements": stmt_count[0]["c"] if stmt_count else 0,
+                    "concepts": concept_count[0]["c"] if concept_count else 0,
+                    "sources": source_count[0]["c"] if source_count else 0,
                     "relationships": rel_count[0]["c"] if rel_count else 0,
                 },
                 "nodes": nodes_by_type,
-                # Keep legacy fields for backward compat
                 "total_agents": len(all_peers),
                 "active_agents": alive_count,
-                "total_observations": obs_count[0]["c"] if obs_count else 0,
-                "total_claims": claim_count[0]["c"] if claim_count else 0,
-                "total_entities": entity_count[0]["c"] if entity_count else 0,
                 "websocket_clients": len(ui_clients),
             }
         except Exception:  # pylint: disable=broad-exception-caught  # stats query failure returns fallback data
@@ -288,17 +284,14 @@ def create_ui_bridge(node: PeerNode, store: TripleStore) -> APIRouter:
                 },
                 "knowledge": {
                     "observations": 0,
-                    "claims": 0,
-                    "entities": 0,
-                    "triples": 0,
+                    "statements": 0,
+                    "concepts": 0,
+                    "sources": 0,
                     "relationships": 0,
                 },
                 "nodes": nodes_by_type,
                 "total_agents": len(all_peers),
                 "active_agents": alive_count,
-                "total_observations": 0,
-                "total_claims": 0,
-                "total_entities": 0,
                 "websocket_clients": len(ui_clients),
             }
 

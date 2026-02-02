@@ -297,8 +297,8 @@ class TestMethodCapabilities:
     def test_all_memory_api_methods_covered(self):
         expected = {
             "observe", "claim", "remember", "infer",
-            "get_recent_observations", "get_recent_claims",
-            "get_unresolved_contradictions", "get_entities", "clear",
+            "get_recent_observations", "get_recent_statements",
+            "get_unresolved_contradictions", "get_concepts", "clear",
         }
         assert set(METHOD_CAPABILITIES.keys()) == expected
 
@@ -532,14 +532,14 @@ class TestP2PMemoryClient:
             async def get_recent_observations(self, limit=10):
                 return [{"id": "obs-1", "raw_content": "hello"}]
 
-            async def get_recent_claims(self, limit=20):
+            async def get_recent_statements(self, limit=20):
                 return []
 
             async def get_unresolved_contradictions(self):
                 return []
 
-            async def get_entities(self):
-                return [{"id": "e-1", "name": "test"}]
+            async def get_concepts(self):
+                return [{"id": "c-1", "name": "test"}]
 
             async def clear(self):
                 pass
@@ -567,8 +567,8 @@ class TestP2PMemoryClient:
         result = await client_with_mock_memory.get_recent_observations()
         assert len(result) == 1
 
-    async def test_get_entities_local(self, client_with_mock_memory):
-        result = await client_with_mock_memory.get_entities()
+    async def test_get_concepts_local(self, client_with_mock_memory):
+        result = await client_with_mock_memory.get_concepts()
         assert len(result) == 1
 
     async def test_clear_local(self, client_with_mock_memory):

@@ -1,5 +1,5 @@
 name: query_generation
-version: "1.0"
+version: "2.0"
 description: Translate natural language questions into Cypher queries
 
 system: |
@@ -10,22 +10,29 @@ user: |
 
   ## Graph Schema
 
-  Nodes have label `:Node` with these properties:
-  - `id`: UUID string
-  - `type`: "Observation", "Claim", "Resolution", or "Entity"
-  - `source`: who created this node
-  - `timestamp`: ISO8601 datetime string
-  - `raw_content`: original text (on Observations)
-  - `name`: entity name (on Entity nodes)
-  - `confidence`: float 0-1 (on Claims)
-  - `subject_text`, `predicate_text`, `object_text`: relationship components (on Claims)
+  Node labels:
+  - `:Concept` — name (string), kind (string), aliases (string[]), created_at (datetime)
+  - `:Statement` — predicate (string), confidence (float 0-1), negated (boolean), created_at (datetime)
+  - `:Observation` — raw_content (string), topics (string[]), created_at (datetime)
+  - `:Source` — name (string), kind (string), created_at (datetime)
 
   Relationships:
-  - `SUBJECT`: from Claim/Observation to Entity
-  - `BASIS`: from Claim to what it's based on (Observation or another Claim)
-  - `SUPERSEDES`: from newer Claim to older one it replaces
-  - `CONTRADICTS`: between conflicting Claims
-  - Dynamic predicate edges between Entity nodes (e.g. `IS_NAMED`, `PREFERS`, `WORKS_AT`) — these are the actual knowledge triples
+  - `(Statement)-[:ABOUT_SUBJECT]->(Concept)` — the subject of the statement
+  - `(Statement)-[:ABOUT_OBJECT]->(Concept)` — the object/value of the statement
+  - `(Statement)-[:DERIVED_FROM]->(Observation|Statement)` — provenance chain
+  - `(Statement)-[:ASSERTED_BY]->(Source)` — who made this assertion
+  - `(Statement)-[:SUPERSEDES]->(Statement)` — newer replaces older
+  - `(Statement)-[:CONTRADICTS]->(Statement)` — conflicting statements
+  - `(Observation)-[:MENTIONS]->(Concept)` — concepts appearing in the observation
+  - `(Observation)-[:RECORDED_BY]->(Source)` — who recorded it
+  - `(Concept)-[:RELATED_TO {relation}]->(Concept)` — concept decomposition/hierarchy
+
+  ## Important Patterns
+  - To check if a statement is current (not superseded):
+    `WHERE NOT EXISTS { MATCH (:Statement)-[:SUPERSEDES]->(s) }`
+  - Concept names are lowercase. Use `toLower()` for matching user input.
+  - The predicate is a property on the Statement node, NOT a relationship type.
+  - Use `toLower(c.name)` for case-insensitive concept matching.
 
   ## Output Format
 

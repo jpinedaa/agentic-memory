@@ -24,53 +24,74 @@ Some statements produce multiple triples. "My girlfriend's name is Ami" implies 
 
 ---
 
-## 2. Two Layers of Representation
+## 2. Reified Triples — Statements as Nodes
 
-The graph has two distinct layers that serve different purposes:
-
-### Layer 1: Entity Graph (structure)
-
-Entity-to-entity edges are the **knowledge graph proper** — the web of relationships between things in the world.
+In Neo4j, relationships cannot be the subject or object of other relationships. To attach metadata (confidence, provenance, negation) to a triple, we **reify** it: the triple becomes a `:Statement` node with edges to its subject and object `:Concept` nodes.
 
 ```
-(Entity: bitcoin) ──IS──▶ (Entity: peer-to-peer network)
-(Entity: user) ──PREFERS──▶ (Entity: dark mode)
-(Entity: ami) ──GIRLFRIEND_OF──▶ (Entity: user)
+(:Statement {predicate: "prefers", confidence: 0.9})
+    ├──ABOUT_SUBJECT──▶ (:Concept {name: "user"})
+    ├──ABOUT_OBJECT──▶ (:Concept {name: "afternoon meetings"})
+    ├──DERIVED_FROM──▶ (:Observation {raw_content: "..."})
+    └──ASSERTED_BY──▶ (:Source {name: "inference_agent"})
 ```
 
-These edges are created by `observe()` from LLM-extracted triples. They represent **what the system knows about the world** as graph structure.
-
-- Predicates are normalized to Neo4j relationship types: uppercase, spaces/hyphens become underscores
-- `"has girlfriend"` → `HAS_GIRLFRIEND`
-- `"is"` → `IS`
-- Both subject and object are Entity nodes (deduplicated by name, case-insensitive)
-
-### Layer 2: Provenance Graph (metadata)
-
-Observation, Claim, and Resolution nodes track **where knowledge came from and how confident we are**.
-
-```
-(Observation: "the user said bitcoin is a peer-to-peer network")
-     │
-     ├──SUBJECT──▶ (Entity: user)
-     ├──SUBJECT──▶ (Entity: bitcoin)
-
-(Claim: "user understands bitcoin is peer-to-peer")
-     │
-     ├──SUBJECT──▶ (Entity: user)
-     ├──BASIS──▶ (Observation above)
-     │
-     confidence: 0.85
-     source: "inference_agent"
-```
-
-The provenance graph answers: *why do we believe this?* The entity graph answers: *what do we believe?*
+This enables:
+- **Confidence** on any assertion
+- **Provenance** chains (which observation led to which statement)
+- **Supersession** (newer statement replaces older via SUPERSEDES edge)
+- **Contradiction** tracking (two statements linked by CONTRADICTS)
+- **Negation** (a statement can assert "user does NOT prefer mornings")
 
 ---
 
-## 3. Node Types
+## 3. Concept Decomposition
 
-All nodes share the Neo4j label `:Node` and are distinguished by a `type` property.
+Compound concepts are decomposed into sub-concepts via `RELATED_TO` edges, making knowledge traversable:
+
+```
+(:Concept {name: "peer-to-peer network"})
+    ├──RELATED_TO {relation: "is_a"}──▶ (:Concept {name: "network"})
+    └──RELATED_TO {relation: "has_property"}──▶ (:Concept {name: "peer-to-peer"})
+```
+
+This means a query about "network" can discover "peer-to-peer network" through graph traversal.
+
+`RELATED_TO.relation` values: `"is_a"`, `"part_of"`, `"has_property"`, `"modifier"`, `"head_noun"`, `"synonym"`, `"broader"`
+
+---
+
+## 4. Node Types (Labels)
+
+The graph uses four Neo4j labels. Each node type has a unique `id` constraint.
+
+### Concept
+
+A named thing in the world — person, place, idea, category, value.
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `id` | UUID | Unique identifier |
+| `name` | string | Canonical name (lowercase unless proper noun) |
+| `kind` | string | `"entity"`, `"attribute"`, `"value"`, `"category"`, `"action"` |
+| `aliases` | string[] | Alternative names |
+| `created_at` | datetime | When created |
+
+**Created by**: `observe()` or `claim()`, via `store.get_or_create_concept()`. Deduplicated by case-insensitive name match.
+
+### Statement
+
+A reified triple with metadata. All knowledge assertions flow through Statement nodes.
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `id` | UUID | Unique identifier |
+| `predicate` | string | Relationship verb (e.g. "is", "prefers", "has") |
+| `confidence` | float | 0.0–1.0 certainty score |
+| `negated` | boolean | True for negative assertions |
+| `created_at` | datetime | When created |
+
+**Created by**: `observe()` (from LLM-extracted statements) and `claim()` (from agent assertions).
 
 ### Observation
 
@@ -79,93 +100,44 @@ Raw input from the external world. Never modified after creation.
 | Property | Type | Description |
 |----------|------|-------------|
 | `id` | UUID | Unique identifier |
-| `type` | `"Observation"` | Node type |
-| `source` | string | Who provided this (e.g. `"cli_user"`) |
-| `timestamp` | ISO 8601 | When recorded |
 | `raw_content` | string | Original unprocessed text |
-| `topics` | string | Comma-separated topic keywords |
+| `topics` | string[] | Topic keywords |
+| `created_at` | datetime | When recorded |
 
 **Created by**: `observe()` only (adapters, CLI, external input).
 
-**Relationships created**:
-- `Observation ──SUBJECT──▶ Entity` for each mentioned entity
-- `Entity ──[PREDICATE]──▶ Entity` for each extracted triple (entity graph edges)
+### Source
 
-### Entity
-
-A named thing in the world — person, place, concept, object.
+An agent, user, or system that produces knowledge. First-class provenance node.
 
 | Property | Type | Description |
 |----------|------|-------------|
 | `id` | UUID | Unique identifier |
-| `type` | `"Entity"` | Node type |
-| `name` | string | Canonical name |
+| `name` | string | e.g. `"cli_user"`, `"inference_agent"` |
+| `kind` | string | `"user"`, `"agent"`, `"system"` |
+| `created_at` | datetime | When created |
 
-**Created by**: Either `observe()` or `claim()`, via `store.get_or_create_entity()`. Deduplicated by case-insensitive name match.
-
-**Key behavior**: If an entity named "bitcoin" already exists, any later reference to "Bitcoin" or "BITCOIN" reuses the same node. This is the only deduplication the system performs.
-
-### Claim
-
-A structured assertion produced by an agent. The sole output of the inference pipeline.
-
-| Property | Type | Description |
-|----------|------|-------------|
-| `id` | UUID | Unique identifier |
-| `type` | `"Claim"` | Node type |
-| `source` | string | Which agent (e.g. `"inference_agent"`) |
-| `timestamp` | ISO 8601 | When asserted |
-| `subject_text` | string | Subject of the assertion |
-| `predicate_text` | string | Relationship or attribute |
-| `object_text` | string | Value or target |
-| `confidence` | float | 0.0–1.0 certainty score |
-
-**Created by**: `claim()` only (agents via the inference pipeline).
-
-**Relationships created**:
-- `Claim ──SUBJECT──▶ Entity` (the entity this claim is about)
-- `Claim ──BASIS──▶ Observation|Claim` (evidential links, what this claim is based on)
-- `Claim ──CONTRADICTS──▶ Claim` (if this contradicts another claim)
-
-### Resolution
-
-A special Claim that explicitly resolves a contradiction by superseding one or more earlier claims.
-
-| Property | Type | Description |
-|----------|------|-------------|
-| (same as Claim) | | |
-| `type` | `"Resolution"` | Distinguishes from regular Claim |
-
-**Additional relationship**:
-- `Resolution ──SUPERSEDES──▶ Claim` (marks the older claim as resolved)
+**Created by**: `observe()` or `claim()`, via `store.get_or_create_source()`. Deduplicated by name.
 
 ---
 
-## 4. Relationship Types
+## 5. Relationship Types
 
-### System Relationships (structural metadata)
-
-| Relationship | From → To | Meaning | Created By |
-|--------------|-----------|---------|------------|
-| `SUBJECT` | Observation/Claim → Entity | "This is about that entity" | `observe()`, `claim()` |
-| `BASIS` | Claim → Observation/Claim | "This claim is based on that evidence" | `claim()` |
-| `CONTRADICTS` | Claim → Claim | "These claims conflict" | `claim()` (validator agent) |
-| `SUPERSEDES` | Resolution → Claim | "This resolution replaces that claim" | `claim()` (resolution) |
-
-### Knowledge Relationships (dynamic predicates)
-
-| Relationship | From → To | Meaning | Created By |
-|--------------|-----------|---------|------------|
-| `IS`, `HAS`, `PREFERS`, `WORKS_AT`, ... | Entity → Entity | A fact about the world | `observe()` |
-
-Dynamic predicates are normalized from extracted triple predicates:
-```
-predicate.strip().upper().replace(" ", "_").replace("-", "_")
-```
+| Relationship | From → To | Purpose |
+|---|---|---|
+| `ABOUT_SUBJECT` | Statement → Concept | The subject of the statement |
+| `ABOUT_OBJECT` | Statement → Concept | The object/value of the statement |
+| `DERIVED_FROM` | Statement → Observation or Statement | Provenance chain |
+| `ASSERTED_BY` | Statement → Source | Who made this assertion |
+| `SUPERSEDES` | Statement → Statement | Newer replaces older (resolution) |
+| `CONTRADICTS` | Statement → Statement | Conflicting statements |
+| `MENTIONS` | Observation → Concept | Concepts appearing in the observation |
+| `RECORDED_BY` | Observation → Source | Who recorded this |
+| `RELATED_TO` | Concept → Concept | Decomposition/hierarchy (property: `relation`) |
 
 ---
 
-## 5. Data Flow
+## 6. Data Flow
 
 ### observe() — recording raw input
 
@@ -173,158 +145,138 @@ predicate.strip().upper().replace(" ", "_").replace("-", "_")
 Input: "the user said bitcoin is a peer-to-peer network"
 
 1. LLM extracts:
-   entities: ["user", "bitcoin", "peer-to-peer network"]
-   extractions: [{subject: "bitcoin", predicate: "is", object: "peer-to-peer network"},
-                 {subject: "user", predicate: "understands", object: "bitcoin"}]
+   concepts: [
+     {name: "user", kind: "entity"},
+     {name: "bitcoin", kind: "entity"},
+     {name: "peer-to-peer network", kind: "category",
+      components: [{name: "network", relation: "is_a"},
+                   {name: "peer-to-peer", relation: "has_property"}]}
+   ]
+   statements: [{subject: "bitcoin", predicate: "is", object: "peer-to-peer network",
+                  confidence: 1.0}]
    topics: ["cryptocurrency", "technology"]
 
-2. Create Observation node (raw_content preserved)
-
-3. Link observation to entities:
-   Observation ──SUBJECT──▶ Entity("user")
-   Observation ──SUBJECT──▶ Entity("bitcoin")
-   Observation ──SUBJECT──▶ Entity("peer-to-peer network")
-
-4. Create entity-to-entity edges from triples:
-   Entity("bitcoin") ──IS──▶ Entity("peer-to-peer network")
-   Entity("user") ──UNDERSTANDS──▶ Entity("bitcoin")
+2. Create Source node (get_or_create)
+3. Create Observation node (raw_content preserved)
+4. Link: Observation ──RECORDED_BY──▶ Source
+5. Create Concept nodes (get_or_create), link: Observation ──MENTIONS──▶ Concept
+6. For compound concepts, decompose: Concept ──RELATED_TO──▶ sub-Concept
+7. Create Statement nodes from extracted statements:
+   Statement ──ABOUT_SUBJECT──▶ Concept("bitcoin")
+   Statement ──ABOUT_OBJECT──▶ Concept("peer-to-peer network")
+   Statement ──DERIVED_FROM──▶ Observation
+   Statement ──ASSERTED_BY──▶ Source
 ```
-
-No Claim nodes are created. Observations record **what was said** and build **graph structure** from the extracted triples. Interpretation is the inference agent's job.
 
 ### claim() — agent assertions
 
 ```
-Input: "user understands that bitcoin is a peer-to-peer network"
+Input: "user prefers afternoon meetings based on their direct statement"
 Source: "inference_agent"
 
 1. LLM parses with recent context:
-   subject: "user"
-   predicate: "understands"
-   object: "bitcoin is a peer-to-peer network"
-   confidence: 0.85
-   basis_descriptions: ["the user said bitcoin is a peer-to-peer network"]
+   subject: "user", predicate: "prefers", object: "afternoon meetings"
+   confidence: 0.85, negated: false
+   basis_descriptions: ["user said they prefer afternoon meetings"]
 
-2. Create Claim node (with confidence, subject/predicate/object as properties)
-
-3. Link claim to entity:
-   Claim ──SUBJECT──▶ Entity("user")
-
-4. Link basis (text matching against recent observations/claims):
-   Claim ──BASIS──▶ Observation (matched by text overlap)
-
-5. If contradiction detected:
-   Claim ──CONTRADICTS──▶ Claim (matched by text overlap)
-
-6. If resolution:
-   Resolution ──SUPERSEDES──▶ Claim (matched by text overlap)
+2. Create Source node (get_or_create)
+3. Create Statement node (predicate + confidence + negated)
+4. Create Concept nodes for subject/object
+5. Link: Statement ──ABOUT_SUBJECT──▶ Concept("user")
+         Statement ──ABOUT_OBJECT──▶ Concept("afternoon meetings")
+         Statement ──ASSERTED_BY──▶ Source
+6. Link basis (text matching): Statement ──DERIVED_FROM──▶ Observation/Statement
+7. If supersession: Statement ──SUPERSEDES──▶ old Statement
+8. If contradiction: Statement ──CONTRADICTS──▶ other Statement
 ```
-
-Claims record **what an agent believes** with confidence scores and evidential links back to their source material.
 
 ---
 
-## 6. Design Philosophy
+## 7. Design Philosophy
 
-### Why two layers?
+### All knowledge goes through Statement nodes
 
-The entity graph and provenance graph serve fundamentally different query patterns:
+There are no dynamic predicate edges (like `Entity --PREFERS--> Entity`). Every assertion is a Statement node with `ABOUT_SUBJECT` and `ABOUT_OBJECT` edges. This means:
 
-| Question | Layer | Query Pattern |
-|----------|-------|---------------|
-| "What is bitcoin?" | Entity graph | Follow edges from Entity("bitcoin") |
-| "Why does the system think the user understands bitcoin?" | Provenance graph | Claim → BASIS → Observation chain |
-| "What contradictions exist about the user?" | Provenance graph | Claim → CONTRADICTS → Claim |
-| "What relationships does the user have?" | Entity graph | All edges from Entity("user") |
+- Every piece of knowledge has confidence, provenance, and can be superseded
+- You can query "all statements where X is the object" (impossible with dynamic edge types)
+- Contradictions and resolutions are tracked uniformly
 
-### Observations don't judge, they record
+### Observations and claims both create Statements
 
-`observe()` creates graph structure (entity edges) directly from extracted triples — this is a mechanical translation of natural language into graph form. No confidence scoring, no reasoning about what the input *means*.
+`observe()` creates Statements from LLM-extracted triples. `claim()` creates Statements from agent assertions. The difference is in provenance (DERIVED_FROM an Observation vs another Statement) and source (user vs agent).
 
-### Claims are the inference agent's job
+### Concepts are universal nouns
 
-Only agents produce Claim nodes. A Claim is a deliberate assertion with:
-- **Confidence** — how certain the agent is
-- **Basis** — what evidence supports it
-- **Source** — which agent made this assertion
-
-This separation means you can always distinguish "what was directly stated" (observations + entity edges) from "what was inferred" (claims).
+A Concept can be an entity ("bitcoin"), a value ("afternoon"), a category ("network"), an attribute ("color"), or an action ("running"). The `kind` property distinguishes them but all are first-class graph citizens.
 
 ### Contradictions are data, not errors
 
-When two claims conflict, both persist. The validator agent creates a CONTRADICTS link between them. Resolution happens later, via a Resolution node that SUPERSEDES one of the conflicting claims. Until then, the contradiction is visible signal — not a bug.
+When two statements conflict, both persist. The validator agent creates a CONTRADICTS link. Resolution happens via a new Statement that SUPERSEDES one of the conflicting ones. Until then, the contradiction is visible signal.
 
-### Entity deduplication is name-based
+### Source is a first-class node
 
-The only automatic deduplication is case-insensitive entity name matching. "Bitcoin", "bitcoin", and "BITCOIN" all resolve to the same Entity node. Beyond that, the system does not attempt to merge entities that might refer to the same thing under different names. This is a deliberate simplicity choice — semantic entity resolution can be added as a future agent.
+Provenance is traversable, not a string property. You can query "what has this agent asserted?" or "what observations came from this user?" via graph traversal.
 
 ---
 
-## 7. Reading the Graph
+## 8. Reading the Graph
 
-### Entity-centric queries (what do we know?)
+### Concept-centric queries
 
 ```cypher
--- All relationships for an entity
-MATCH (e:Node {type: 'Entity', name: 'bitcoin'})-[r]-(other:Node {type: 'Entity'})
-RETURN e.name, type(r), other.name
+-- All statements about a concept (excluding superseded)
+MATCH (s:Statement)-[:ABOUT_SUBJECT|ABOUT_OBJECT]->(c:Concept)
+WHERE toLower(c.name) = 'bitcoin'
+AND NOT EXISTS { MATCH (:Statement)-[:SUPERSEDES]->(s) }
+OPTIONAL MATCH (s)-[:ABOUT_SUBJECT]->(subj:Concept)
+OPTIONAL MATCH (s)-[:ABOUT_OBJECT]->(obj:Concept)
+RETURN subj.name, s.predicate, obj.name, s.confidence
 
--- What observations mention an entity?
-MATCH (obs:Node {type: 'Observation'})-[:SUBJECT]->(e:Node {type: 'Entity'})
-WHERE toLower(e.name) = 'bitcoin'
-RETURN obs.raw_content, obs.timestamp
+-- Concept decomposition
+MATCH (c:Concept {name: 'peer-to-peer network'})-[r:RELATED_TO]->(sub:Concept)
+RETURN c.name, r.relation, sub.name
 ```
 
-### Provenance queries (why do we believe it?)
+### Provenance queries
 
 ```cypher
--- Claims about an entity (excluding superseded)
-MATCH (c:Node)-[:SUBJECT]->(e:Node {type: 'Entity'})
-WHERE c.type IN ['Claim', 'Resolution']
-AND toLower(e.name) = 'user'
-AND NOT EXISTS { MATCH (newer:Node)-[:SUPERSEDES]->(c) }
-RETURN c.subject_text, c.predicate_text, c.object_text, c.confidence
-ORDER BY c.confidence DESC
+-- Trace a statement back to its source observation
+MATCH (s:Statement {id: $stmt_id})-[:DERIVED_FROM]->(obs:Observation)
+RETURN obs.raw_content
 
--- Trace a claim back to its basis
-MATCH (c:Node {type: 'Claim'})-[:BASIS]->(basis)
-RETURN c.subject_text, c.predicate_text, c.object_text,
-       basis.type, basis.raw_content
+-- What has this agent asserted?
+MATCH (s:Statement)-[:ASSERTED_BY]->(src:Source {name: 'inference_agent'})
+OPTIONAL MATCH (s)-[:ABOUT_SUBJECT]->(subj:Concept)
+OPTIONAL MATCH (s)-[:ABOUT_OBJECT]->(obj:Concept)
+RETURN subj.name, s.predicate, obj.name, s.confidence
 ```
 
 ### Contradiction queries
 
 ```cypher
 -- Unresolved contradictions
-MATCH (c1:Node)-[:CONTRADICTS]->(c2:Node)
-WHERE NOT EXISTS { MATCH (:Node)-[:SUPERSEDES]->(c1) }
-AND NOT EXISTS { MATCH (:Node)-[:SUPERSEDES]->(c2) }
-RETURN c1, c2
+MATCH (s1:Statement)-[:CONTRADICTS]->(s2:Statement)
+WHERE NOT EXISTS { MATCH (:Statement)-[:SUPERSEDES]->(s1) }
+AND NOT EXISTS { MATCH (:Statement)-[:SUPERSEDES]->(s2) }
+RETURN s1, s2
 ```
 
 ---
 
-## 8. Known Limitations
+## 9. Known Limitations
 
-### Claims don't create entity-to-entity edges
+### Text-based matching for DERIVED_FROM links
 
-When the inference agent creates a Claim like "user prefers afternoon meetings", this is stored as properties on the Claim node (`subject_text`, `predicate_text`, `object_text`). No `Entity("user") ──PREFERS──▶ Entity("afternoon meetings")` edge is created.
+When `claim()` links a new statement to its basis, it uses word-overlap heuristics against recent observations and statements. This is best-effort — it may miss relevant nodes or create false matches. Semantic similarity search (embeddings, vector index) would improve this.
 
-This means the entity graph reflects **observations only** — not inferences. Entity-centric queries will miss inferred knowledge unless they also query Claim node properties.
+### No concept merging
 
-This is a known design trade-off. Observations are considered more structurally reliable (the user actually said something), while claims are interpretations that may be wrong or contradicted later. Materializing claim triples as entity edges would require handling edge retraction when claims are superseded — complexity the system doesn't yet need.
+If observations produce `Concept("my girlfriend")` and `Concept("ami")`, the system does not automatically recognize these as the same person. A concept-merging agent could create `RELATED_TO {relation: "synonym"}` links.
 
-### Text-based matching for BASIS links
+### LLM extraction quality
 
-When `claim()` links a new claim to its basis, it uses word-overlap heuristics against recent observations and claims. This is best-effort — it may miss relevant basis nodes or create false matches. Semantic similarity search (embeddings, vector index) would improve this but adds infrastructure complexity.
-
-### No entity merging
-
-If observations produce `Entity("my girlfriend")` and `Entity("ami")`, the system does not automatically recognize these as the same person. An entity-merging agent could be added to create `SAME_AS` links or merge nodes.
-
-### Observation entity edges are permanent
-
-Entity-to-entity edges created by `observe()` are never retracted. If the LLM extracts an incorrect triple, that edge persists. Claims can be superseded; entity edges cannot. For now, `clear()` is the only remedy.
+The quality of concept decomposition and statement extraction depends entirely on the LLM. The system provides the schema and instructions, but extraction accuracy varies.
 
 ---
 
@@ -336,5 +288,5 @@ Entity-to-entity edges created by `observe()` are never retracted. If the LLM ex
 
 ---
 
-*Document version: 0.1*
-*Last updated: 2026-01-29*
+*Document version: 2.0*
+*Last updated: 2026-02-02*
