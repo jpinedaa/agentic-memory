@@ -333,33 +333,105 @@ class ValidatorAgent(WorkerAgent):
 
 **Safety**: In Python's asyncio, `self._schema = new_schema` is a single reference assignment. The validator's `process()` method reads `self._schema` at the start of each tick. If a schema update arrives mid-tick, the current tick completes with the old schema, and the next tick uses the new one. No lock needed.
 
-### 6.2 Startup Schema Fetch
+### 6.2 InferenceAgent
 
-Currently, agents receive schema via constructor injection (`schema=load_bootstrap_schema()`). With Phase 1, agents should fetch the current schema from the store node on startup:
+The inference agent currently has no schema awareness. Phase 1 wires it up with the same infrastructure so Phase 3–4 can add behavior without re-plumbing:
+
+```python
+class InferenceAgent(WorkerAgent):
+    def __init__(
+        self,
+        memory: MemoryAPI,
+        poll_interval: float = 30.0,
+        state: LocalAgentState | None = None,
+        schema: PredicateSchema | None = None,
+    ) -> None:
+        super().__init__(...)
+        self._schema = schema
+
+    def event_types(self) -> list[str]:
+        return ["observe", "schema_updated"]
+
+    async def on_network_event(
+        self, event_type: str, data: dict[str, Any]
+    ) -> None:
+        if event_type == "schema_updated":
+            schema_dict = data.get("schema")
+            if schema_dict:
+                self._schema = PredicateSchema.from_dict(schema_dict)
+                logger.info(
+                    "Schema hot-reloaded to version %s",
+                    data.get("version"),
+                )
+        if event_type in self.event_types():
+            self._event_received.set()
+```
+
+In Phase 1, `self._schema` is stored but not used in `process()`. Phase 3–4 will add predicate normalization, prompt injection, and confidence priors using this reference. The infrastructure cost is low (one constructor param, one event handler) and avoids rewiring later.
+
+### 6.3 Predicate Normalization in `claim()`
+
+One immediate-value use of schema in Phase 1: normalize predicates at the `claim()` boundary. After `parse_claim()` returns, run the predicate through `schema.normalize_predicate()` before persisting. This benefits **all callers** (inference agent, CLI, future agents), not just one agent.
+
+```python
+# In MemoryService.claim():
+parsed = await self.llm.parse_claim(text, context)
+
+# Normalize predicate against schema aliases
+if self.schema_store:
+    parsed.predicate = self.schema_store.schema.normalize_predicate(
+        parsed.predicate
+    )
+```
+
+This means if the LLM outputs `"is_called"` as the predicate, it gets stored as `"has_name"`. Alias resolution happens once, at write time, so downstream consumers (validator, queries, UI) always see canonical predicates.
+
+**Note**: `ClaimData.predicate` is currently a plain `str` attribute on a dataclass. No change to the dataclass is needed — we're just reassigning the field before use.
+
+### 6.4 Startup Schema Fetch
+
+Currently, the validator receives schema via constructor injection (`schema=load_bootstrap_schema()`). With Phase 1, **both** the validator and inference agents fetch the current schema from the store node on startup:
 
 ```python
 # In run_node.py, after node.start() and P2PMemoryClient creation:
-if Capability.VALIDATION in capabilities:
-    try:
-        schema_dict = await memory.get_schema()
+
+# Fetch schema once for all agents that need it
+schema = None
+try:
+    schema_dict = await memory.get_schema()
+    if schema_dict:
         schema = PredicateSchema.from_dict(schema_dict)
-    except Exception:
-        # Store node may not be ready yet; fall back to bootstrap
-        schema = load_bootstrap_schema()
+except Exception:
+    pass
+if schema is None:
+    schema = load_bootstrap_schema()
+
+if Capability.INFERENCE in capabilities:
+    agent = InferenceAgent(
+        memory=memory, poll_interval=args.poll_interval,
+        state=state, schema=schema,
+    )
+    node.add_event_listener(agent.on_network_event)
+    tasks.append(asyncio.create_task(agent.run()))
+
+if Capability.VALIDATION in capabilities:
     agent = ValidatorAgent(
         memory=memory, poll_interval=args.poll_interval,
         state=state, schema=schema,
     )
+    node.add_event_listener(agent.on_network_event)
+    tasks.append(asyncio.create_task(agent.run()))
 ```
 
-This ensures the validator starts with the latest dynamic schema, not just the static bootstrap. The bootstrap remains as a fallback if the store node is unreachable during startup.
+Schema is fetched once and shared across agents on the same node. The bootstrap remains as a fallback if the store node is unreachable during startup.
 
-### 6.3 Future Agents
+### 6.5 Future Agents
 
 Any agent that needs schema access follows the same pattern:
-1. Fetch via `get_schema()` on startup
-2. Listen for `schema_updated` events during operation
-3. Swap internal `PredicateSchema` reference on update
+1. Accept `schema` in constructor, store as `self._schema`
+2. Subscribe to `"schema_updated"` in `event_types()`
+3. Override `on_network_event()` to deserialize and swap `self._schema`
+4. Fetch via `get_schema()` on startup in `run_node.py`
 
 ---
 
@@ -510,13 +582,15 @@ The `data/` directory must exist on the store node. In Docker, this is a volume 
 | `src/p2p/types.py` | Add `Capability.SCHEMA` enum value. |
 | `src/p2p/node.py` | Broadcast `schema_updated` event after `update_schema` requests. Use TTL 5 for schema events. |
 
-### 10.3 Agents — hot-reload and startup fetch
+### 10.3 Agents — hot-reload, startup fetch, normalization
 
 | File | Change |
 |---|---|
 | `src/agents/validator.py` | Add `"schema_updated"` to `event_types()`. Override `on_network_event()` to deserialize and swap `self._schema` on schema events. |
-| `run_node.py` | Create `SchemaStore` on store nodes and pass to `MemoryService`. Fetch schema via `get_schema()` for validator startup (bootstrap fallback). Add `Capability.SCHEMA` support in arg parsing (no agent started yet — that's Phase 2). |
-| `main.py` | Same `SchemaStore` wiring for dev mode. |
+| `src/agents/inference.py` | Add `schema: PredicateSchema \| None = None` constructor param. Add `"schema_updated"` to `event_types()`. Override `on_network_event()` for hot-reload (same pattern as validator). Store `self._schema` for Phase 3–4 use. |
+| `src/interfaces.py` | *(also listed in 10.1)* In `claim()`, normalize `parsed.predicate` via `schema_store.schema.normalize_predicate()` before persisting. This gives immediate alias resolution for all callers. |
+| `run_node.py` | Create `SchemaStore` on store nodes and pass to `MemoryService`. Fetch schema via `get_schema()` once on startup, pass to **both** validator and inference agents (bootstrap fallback). Add `Capability.SCHEMA` support in arg parsing (no agent started yet — that's Phase 2). |
+| `main.py` | Same `SchemaStore` wiring and shared schema fetch for dev mode. |
 
 ### 10.4 UI layer — dashboard visibility
 
@@ -547,6 +621,7 @@ The `data/` directory must exist on the store node. In Docker, this is a volume 
 | `tests/test_schema.py` | Add tests for `PredicateSchema.from_dict()` / `to_dict()` round-trip. Test backward compatibility (bootstrap format without provenance fields). Test new `PredicateInfo` fields (`origin`, `reasoning`, `last_reviewed`). |
 | `tests/test_schema_store.py` | **New file.** Unit tests for `SchemaStore`: bootstrap seeding, load existing, update merge semantics, new predicate, modify existing, version increment, file persistence. Uses temp directory — no Neo4j needed. |
 | `tests/test_validator_unit.py` | Add test for `event_types()` including `"schema_updated"`. Add test for `on_network_event()` hot-reload: simulate schema_updated event, verify `self._schema` is swapped. |
+| `tests/test_inference_unit.py` | **New file or added to existing.** Test schema constructor param. Test `on_network_event()` hot-reload. Test `event_types()` includes `"schema_updated"`. |
 | `tests/test_p2p.py` | Update any tests that enumerate `Capability` values or `METHOD_CAPABILITIES` keys to include the new `SCHEMA` capability and schema methods. |
 
 ### 10.8 New files
@@ -563,7 +638,6 @@ The `data/` directory must exist on the store node. In Docker, this is a volume 
 |---|---|
 | `src/schema/bootstrap.yaml` | Unchanged. Serves as seed for first run only. |
 | `src/agents/base.py` | No changes needed. Event-driven wakeup already supports new event types via subclass override. |
-| `src/agents/inference.py` | Schema-aware inference is Phase 4. |
 | `src/llm.py` | Schema-aware prompts are Phase 3–4. |
 | `src/store.py` | Schema is not stored in Neo4j. |
 | `src/cli.py` | CLI does not consume schema directly. |
@@ -617,6 +691,9 @@ If the store node is down when an agent calls `get_schema()`, the agent falls ba
 | `PredicateSchema.from_dict()` bootstrap format | Accepts dicts without provenance fields (backward compatibility) |
 | Validator hot-reload | Simulated `schema_updated` event swaps `self._schema` |
 | Validator event subscription | `event_types()` includes `"schema_updated"` |
+| Inference agent hot-reload | Simulated `schema_updated` event swaps `self._schema` |
+| Inference agent schema constructor | Accepts and stores schema parameter |
+| Predicate normalization in `claim()` | `MemoryService.claim()` normalizes predicates via schema aliases before persisting |
 
 ### 12.2 Integration Tests (needs Neo4j)
 
@@ -643,6 +720,6 @@ If the store node is down when an agent calls `get_schema()`, the agent falls ba
 
 ---
 
-*Document version: 1.1*
+*Document version: 1.2*
 *Last updated: 2026-02-02*
 *Status: Phase 1 spec — ready for implementation.*
