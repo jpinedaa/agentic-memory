@@ -170,6 +170,20 @@ export function GraphView({ maximized, onToggleMaximize }: Props) {
     feMerge.append('feMergeNode').attr('in', 'coloredBlur');
     feMerge.append('feMergeNode').attr('in', 'SourceGraphic');
 
+    // Arrowhead marker for directed edges
+    defs.append('marker')
+      .attr('id', 'arrowhead')
+      .attr('viewBox', '0 -4 8 8')
+      .attr('refX', 8)
+      .attr('refY', 0)
+      .attr('markerWidth', 6)
+      .attr('markerHeight', 6)
+      .attr('orient', 'auto')
+      .append('path')
+      .attr('d', 'M0,-4L8,0L0,4')
+      .attr('fill', 'var(--edge-default)')
+      .attr('fill-opacity', 0.6);
+
     const g = svg.append('g');
     gRef.current = g;
 
@@ -261,7 +275,8 @@ export function GraphView({ maximized, onToggleMaximize }: Props) {
       .append('line')
       .attr('stroke', 'var(--edge-default)')
       .attr('stroke-opacity', 0.6)
-      .attr('stroke-width', 1);
+      .attr('stroke-width', 1)
+      .attr('marker-end', 'url(#arrowhead)');
     const linkMerged = linkEnter.merge(link);
 
     // Edge labels
@@ -382,8 +397,24 @@ export function GraphView({ maximized, onToggleMaximize }: Props) {
       linkMerged
         .attr('x1', (d) => ((d.source as unknown as { x: number }).x ?? 0))
         .attr('y1', (d) => ((d.source as unknown as { y: number }).y ?? 0))
-        .attr('x2', (d) => ((d.target as unknown as { x: number }).x ?? 0))
-        .attr('y2', (d) => ((d.target as unknown as { y: number }).y ?? 0));
+        .attr('x2', (d) => {
+          const s = d.source as unknown as SimNode;
+          const t = d.target as unknown as SimNode;
+          const dx = (t.x ?? 0) - (s.x ?? 0);
+          const dy = (t.y ?? 0) - (s.y ?? 0);
+          const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+          const r = NODE_RADIUS[t.type] || 8;
+          return (t.x ?? 0) - (dx / dist) * r;
+        })
+        .attr('y2', (d) => {
+          const s = d.source as unknown as SimNode;
+          const t = d.target as unknown as SimNode;
+          const dx = (t.x ?? 0) - (s.x ?? 0);
+          const dy = (t.y ?? 0) - (s.y ?? 0);
+          const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+          const r = NODE_RADIUS[t.type] || 8;
+          return (t.y ?? 0) - (dy / dist) * r;
+        });
 
       edgeLabelMerged
         .attr('x', (d) => {
