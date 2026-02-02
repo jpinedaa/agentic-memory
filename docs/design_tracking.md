@@ -1312,13 +1312,15 @@ agentic-memory/
 
 ### 14.6 Running Modes
 
-#### Dev Mode (single process)
+#### Dev Mode (full stack, Docker)
 
 ```bash
-make dev    # or: docker compose up neo4j -d && python main.py
+cp .env.example .env   # first time only — fill in ANTHROPIC_API_KEY
+make dev               # resets Neo4j graph, rebuilds all images, starts full stack with CLI
+make dev ENV_FILE=~/secrets/memory.env   # use a custom env file path
 ```
 
-Spawns 4 PeerNodes in-process on localhost (ports 9000-9003).
+Requires a `.env` file (defaults to `.env` in the project root). Tears down any previous run (including Neo4j data volumes), rebuilds all Docker images, starts Neo4j + store/LLM + inference + validator + CLI in background, waits for health checks, then attaches to the CLI container. Ctrl+C detaches and shuts down all containers cleanly.
 
 #### Distributed Mode (multi-node)
 

@@ -67,6 +67,7 @@ services:
       ADVERTISE_HOST: cli-node
     stdin_open: true
     tty: true
+    init: true
     depends_on:
       store-node:
         condition: service_healthy

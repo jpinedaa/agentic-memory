@@ -34,13 +34,17 @@ make dev-cli          # CLI node on :9003 (needs store node)
 
 ### Dev Mode (full stack, Docker)
 
-Builds and runs all services in Docker (Neo4j, store+LLM, inference, validator, CLI). `--build` ensures the latest code is always used. Interactive — includes the CLI.
+Builds and runs all services in Docker (Neo4j, store+LLM, inference, validator, CLI). `--build` ensures the latest code is always used. The Neo4j graph is wiped on every run for a clean slate. Requires a `.env` file (copy `.env.example` to `.env` and fill in your keys).
 
 ```bash
+cp .env.example .env   # first time only — fill in ANTHROPIC_API_KEY
 make dev
-# Tears down any previous run, rebuilds all images, starts services,
-# waits for store node health, then launches interactive CLI.
-# Ctrl+C shuts down all containers automatically.
+# Tears down any previous run (including Neo4j data), rebuilds all images,
+# starts all services in background, waits for health checks, then attaches
+# to the CLI container. Ctrl+C detaches and shuts down all containers cleanly.
+
+# Use a custom env file path:
+make dev ENV_FILE=~/secrets/memory.env
 ```
 
 ### Distributed Mode (multi-node)
