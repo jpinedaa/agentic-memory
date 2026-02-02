@@ -160,14 +160,6 @@ docker compose logs cli-node --tail 30
 
 **Tip**: The `/v1/graph/nodes` endpoint returns the complete graph with all nodes and edges — pipe through `python3 -m json.tool` or jq for readable output. You can filter for specific edge types (e.g., `CONTRADICTS`, `DERIVED_FROM`) to verify relationship creation.
 
-### Known Issue: P2P Response Serialization
-
-`neo4j.time.DateTime` objects in store query results (e.g., `created_at` fields) cause FastAPI serialization failures in the P2P message handler (`transport.py:_handle_message`). This breaks remote read operations (`get_recent_statements`, `get_recent_observations`) while write operations (`observe`, `claim`, `flag_contradiction`) succeed because they return simple string IDs.
-
-The ui_bridge avoids this with a `_json_safe()` helper that converts unknown types to `str()`. The P2P transport layer needs the same treatment in `Envelope.to_dict()` or in `_handle_message`.
-
-**Impact**: Inference and validator agents fail on every tick when running as separate nodes (Docker `make dev` mode). The CLI `observe` and `?query` work because they route to the store node which handles them locally.
-
 ## Development
 
 **IMPORTANT: Always use the virtual environment or Docker for Python commands.**
