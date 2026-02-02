@@ -10,8 +10,12 @@ install: ## Install dependencies in venv
 	.venv/bin/pip install -e ".[dev]"
 
 dev: ## Run full stack in Docker (Neo4j + store/LLM + inference + validator + CLI)
+	@docker compose down --remove-orphans 2>/dev/null || true
 	docker compose up --build -d
-	docker compose run --build --rm cli-node
+	@echo "Waiting for store node..."
+	@until docker compose exec store-node python -c "import urllib.request; urllib.request.urlopen('http://localhost:9000/p2p/health')" 2>/dev/null; do sleep 2; done
+	@trap 'docker compose down --remove-orphans' EXIT; \
+	docker compose run --rm --no-deps --build cli-node
 
 dev-store: ## Run just the store+llm node locally
 	.venv/bin/python run_node.py --capabilities store,llm --port 9000
@@ -28,8 +32,12 @@ dev-cli: ## Run a CLI node locally (bootstrap to localhost:9000)
 # ── Debug ──────────────────────────────────────────────────────────
 
 debug-agents: ## Run full stack with DEBUG logging for agents, LLM, and prompts
+	@docker compose down --remove-orphans 2>/dev/null || true
 	docker compose up --build -d
-	LOG_CONFIG=logging.debug-agents.json docker compose run --build --rm cli-node
+	@echo "Waiting for store node..."
+	@until docker compose exec store-node python -c "import urllib.request; urllib.request.urlopen('http://localhost:9000/p2p/health')" 2>/dev/null; do sleep 2; done
+	@trap 'docker compose down --remove-orphans' EXIT; \
+	LOG_CONFIG=logging.debug-agents.json docker compose run --rm --no-deps --build cli-node
 
 # ── Testing ─────────────────────────────────────────────────────────
 #

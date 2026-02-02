@@ -38,9 +38,9 @@ Builds and runs all services in Docker (Neo4j, store+LLM, inference, validator, 
 
 ```bash
 make dev
-# or manually:
-docker compose up --build -d          # background services
-docker compose run --build --rm cli-node   # interactive CLI
+# Tears down any previous run, rebuilds all images, starts services,
+# waits for store node health, then launches interactive CLI.
+# Ctrl+C shuts down all containers automatically.
 ```
 
 ### Distributed Mode (multi-node)
