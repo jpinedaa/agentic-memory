@@ -173,11 +173,11 @@ validator_agent = AgentInterface(source="validator_agent")
 **Purpose**: Record a perception from the external world
 
 **Behavior**:
-1. LLM extracts concepts (with kind, aliases, decomposition) and statements (with confidence, negation)
+1. LLM extracts concepts (with kind, aliases, decomposition) from the text
 2. Creates Source node (get_or_create), Observation node, links via RECORDED_BY
 3. Creates Concept nodes for each mentioned concept; links via MENTIONS
 4. For compound concepts, decomposes via RELATED_TO edges to sub-concepts
-5. Creates Statement nodes (reified triples) with ABOUT_SUBJECT, ABOUT_OBJECT, DERIVED_FROM, ASSERTED_BY
+5. Does NOT create Statements — the inference agent is solely responsible for statement creation
 
 **Example**:
 ```python
@@ -188,24 +188,41 @@ chat_observer.observe("user said they hate waking up early for meetings")
 
 **Caller**: Agents only
 
-**Purpose**: Assert an inference, fact, contradiction, or resolution
+**Purpose**: Assert an inference, fact, or resolution
 
 **Behavior**:
 1. LLM parses the claim, identifies:
    - What is being asserted
    - What it's based on (searches for relevant nodes to link as basis)
    - Confidence level (inferred from language or explicit)
-   - Whether it contradicts/supersedes existing claims
-2. Creates Claim node with appropriate triples
-3. Writes triples to store
+   - Whether it supersedes existing claims
+2. Creates Statement node with appropriate triples
+3. Writes Statement to store
+4. Does NOT create CONTRADICTS links — contradiction detection is the validator's job via `flag_contradiction()`
 
 **Examples**:
 ```python
 inference_agent.claim("based on their statement about early meetings, user prefers afternoon meetings")
 
-validator_agent.claim("the claim that user prefers morning meetings contradicts the claim that user prefers afternoon meetings")
-
 resolution_agent.claim("resolving the meeting preference conflict: user prefers afternoon meetings, superseding the morning claim due to higher confidence")
+```
+
+#### flag_contradiction(stmt_id_1: str, stmt_id_2: str, reason: str) → None
+
+**Caller**: Validator agent only
+
+**Purpose**: Record that two statements contradict each other, using exact IDs
+
+**Behavior**:
+1. Creates CONTRADICTS relationship directly between the two Statement nodes
+2. No LLM parsing — the validator already has exact IDs from graph analysis
+3. Schema-aware: validator checks bootstrap predicate schema (cardinality, exclusivity groups) before calling this
+
+**Example**:
+```python
+# Validator found same subject+predicate but different objects for a single-valued predicate
+validator.flag_contradiction(stmt_123_id, stmt_456_id,
+    reason="user has_name: 'jorge' vs 'juan'")
 ```
 
 #### remember(query: str) → str
@@ -392,7 +409,7 @@ Output (ObservationData):
 Input: "based on their statement about early meetings, user prefers afternoon meetings"
 Context: [obs_123 about hating early meetings]
 
-Output:
+Output (ClaimData):
 {
   "subject": "user",
   "predicate": "prefers",
@@ -400,8 +417,7 @@ Output:
   "confidence": 0.8,
   "negated": false,
   "basis_descriptions": ["user said they hate waking up early for meetings"],
-  "supersedes_description": null,
-  "contradicts_description": null
+  "supersedes_description": null
 }
 ```
 
@@ -784,21 +800,23 @@ ValidatorAgent.run() — polls every 8 seconds
 ValidatorAgent.process() (src/agents/validator.py)
     │ 1. memory.get_recent_statements(limit=20)
     │ 2. Group by subject_name, then by predicate
-    │ 3. Within each group, compare object_name values
+    │ 3. Check bootstrap schema: is predicate multi-valued? → skip
+    │ 4. Check exclusivity groups for cross-predicate contradictions
+    │ 5. Within each single-valued group, compare object_name values
     │
-    │ Found: "user prefers morning meetings" vs "user prefers afternoon meetings"
+    │ Found: stmt_123 "user has name jorge" vs stmt_456 "user has name juan"
+    │ Schema: "has name" → "has_name" → single-valued → contradiction
     │
-    ▼ (back in WorkerAgent.run)
-    │ memory.claim("the claim that user prefers 'morning meetings'
-    │              contradicts the claim that user prefers 'afternoon meetings'",
-    │              source="validator_agent")
     ▼
-MemoryService.claim()
-    │ LLM parses → contradicts_description set
-    │ store.create_relationship(new_claim, "CONTRADICTS", old_claim)
+    │ memory.flag_contradiction(stmt_123_id, stmt_456_id,
+    │                           reason="user has name: 'jorge' vs 'juan'")
+    ▼
+MemoryService.flag_contradiction()
+    │ store.create_relationship(stmt_123, "CONTRADICTS", stmt_456)
+    │ (direct — no LLM parsing needed)
     ▼
 Neo4j Graph (new):
-    (claim_456) --CONTRADICTS--> (claim_123)
+    (stmt_123) --CONTRADICTS--> (stmt_456)
 ```
 
 #### Remember Flow (query → resolved response)
@@ -1365,11 +1383,13 @@ make docker-scale-inference N=3
 | 2. Transport layer | Done | `src/p2p/transport.py` (FastAPI + httpx + websockets) |
 | 3. Gossip protocol | Done | `src/p2p/gossip.py` (push-based, fanout=3, interval=5s) |
 | 4. PeerNode runtime | Done | `src/p2p/node.py` (lifecycle, dispatch, neighbors) |
-| 5. P2PMemoryClient | Done | `src/p2p/memory_client.py` (satisfies MemoryAPI) |
+| 5. P2PMemoryClient | Done | `src/p2p/memory_client.py` (satisfies MemoryAPI) + `flag_contradiction()` |
 | 6. Agent updates | Done | Removed EventBus/Redis deps, event-driven via P2P |
 | 7. Entry points | Done | `run_node.py`, updated `main.py` |
-| 8. Unit tests | Done | 54 tests in `tests/test_p2p.py` |
+| 8. Unit tests | Done | 109 non-LLM tests passing |
 | 9. Makefile + Docker | Done | Deployment targets, test overlay |
+| 10. Validator redesign | Done | Schema-aware validation + direct `flag_contradiction()` (no LLM round-trip) |
+| 11. Pipeline separation | Done | `observe()` creates only Observation+Concepts; inference agent creates all Statements |
 
 ### 14.9 Open Items
 

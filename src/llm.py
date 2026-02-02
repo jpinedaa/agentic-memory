@@ -73,7 +73,6 @@ class ClaimData:
     negated: bool = False
     basis_descriptions: list[str] = field(default_factory=list)
     supersedes_description: str | None = None
-    contradicts_description: str | None = None
 
 
 # -- Tool schemas for structured output --
@@ -181,10 +180,6 @@ CLAIM_TOOL = {
                 "type": ["string", "null"],
                 "description": "If this replaces a previous statement, describe what it replaces. null otherwise.",
             },
-            "contradicts_description": {
-                "type": ["string", "null"],
-                "description": "If this contradicts another statement, describe what it contradicts. null otherwise.",
-            },
         },
         "required": ["subject", "predicate", "object", "confidence", "basis_descriptions"],
     },
@@ -289,7 +284,6 @@ class LLMTranslator:
             negated=data.get("negated", False),
             basis_descriptions=data.get("basis_descriptions", []),
             supersedes_description=data.get("supersedes_description"),
-            contradicts_description=data.get("contradicts_description"),
         )
 
     async def generate_query(self, text: str) -> str:

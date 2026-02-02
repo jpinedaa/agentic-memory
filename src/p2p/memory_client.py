@@ -33,6 +33,15 @@ class P2PMemoryClient:
         """Assert a claim via P2P routing."""
         return await self._call("claim", {"text": text, "source": source})
 
+    async def flag_contradiction(
+        self, stmt_id_1: str, stmt_id_2: str, reason: str = ""
+    ) -> None:
+        """Flag a contradiction between two statements via P2P routing."""
+        await self._call(
+            "flag_contradiction",
+            {"stmt_id_1": stmt_id_1, "stmt_id_2": stmt_id_2, "reason": reason},
+        )
+
     async def remember(self, query: str) -> str:
         """Query the knowledge graph via P2P routing."""
         return await self._call("remember", {"query": query})
@@ -91,8 +100,8 @@ class P2PMemoryClient:
         fn = getattr(memory, method)
         result = await fn(**args)
 
-        # After local observe/claim, broadcast event to network
-        if method in ("observe", "claim"):
+        # After local observe/claim/flag_contradiction, broadcast event to network
+        if method in ("observe", "claim", "flag_contradiction"):
             await self._node._broadcast_event(method, {
                 "id": result,
                 "source": args.get("source", ""),

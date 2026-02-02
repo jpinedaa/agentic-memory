@@ -202,9 +202,9 @@ There are no dynamic predicate edges (like `Entity --PREFERS--> Entity`). Every 
 - You can query "all statements where X is the object" (impossible with dynamic edge types)
 - Contradictions and resolutions are tracked uniformly
 
-### Observations and claims both create Statements
+### Only claims create Statements
 
-`observe()` creates Statements from LLM-extracted triples. `claim()` creates Statements from agent assertions. The difference is in provenance (DERIVED_FROM an Observation vs another Statement) and source (user vs agent).
+`observe()` creates Observation and Concept nodes only — it does NOT create Statements. The inference agent processes observations and creates Statements via `claim()`. This gives clear ownership: observations are raw data, the inference agent produces structured knowledge. Provenance is tracked via DERIVED_FROM (Statement → Observation) and ASSERTED_BY (Statement → Source).
 
 ### Concepts are universal nouns
 
@@ -270,13 +270,9 @@ RETURN s1, s2
 
 When `claim()` links a new statement to its basis, it uses word-overlap heuristics against recent observations and statements. This is best-effort — it may miss relevant nodes or create false matches. Semantic similarity search (embeddings, vector index) would improve this.
 
-### No predicate schema
+### Bootstrap predicate schema (static)
 
-Predicates are strings on Statement nodes — the system has no knowledge *about* predicates (cardinality, temporality, synonymy). This means the validator treats all same-subject/same-predicate/different-object pairs as contradictions, even for multi-valued predicates like "has hobby." A dynamic schema layer is being designed to address this. See [Schema Agent Design](schema_agent_design.md).
-
-### Contradiction linking is fragile
-
-The validator detects contradictions by ID but records them via a natural language round-trip through `claim()` → LLM `parse_claim()` → text-based `_find_matching_node()`. This loses the known IDs and is unreliable. Tracked in [Validation Redesign](validation_redesign.md).
+A static bootstrap schema (`src/schema/bootstrap.yaml`) defines predicate cardinality (single/multi), temporality, aliases, and exclusivity groups. The validator checks this schema before flagging contradictions — multi-valued predicates like "has hobby" are skipped. Unknown predicates default to single-valued. A dynamic schema agent will eventually replace/augment this. See [Schema Agent Design](schema_agent_design.md).
 
 ### No concept merging
 

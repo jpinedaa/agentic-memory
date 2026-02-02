@@ -8,6 +8,21 @@ from dataclasses import dataclass, field
 from typing import Any
 
 
+def _json_safe(value: Any) -> Any:
+    """Convert a value to a JSON-serializable type.
+
+    Handles neo4j.time.DateTime and other non-standard types by
+    falling back to str().
+    """
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(v) for v in value]
+    if isinstance(value, dict):
+        return {k: _json_safe(v) for k, v in value.items()}
+    return str(value)
+
+
 @dataclass
 class Envelope:
     """Universal message wrapper for all node-to-node communication.
@@ -34,7 +49,11 @@ class Envelope:
     payload: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
-        """Serialize the envelope to a dict."""
+        """Serialize the envelope to a JSON-safe dict.
+
+        Recursively converts non-serializable types (e.g. neo4j.time.DateTime)
+        to strings so FastAPI/Pydantic can serialize the response.
+        """
         return {
             "msg_type": self.msg_type,
             "msg_id": self.msg_id,
@@ -43,7 +62,7 @@ class Envelope:
             "timestamp": self.timestamp,
             "ttl": self.ttl,
             "reply_to": self.reply_to,
-            "payload": self.payload,
+            "payload": _json_safe(self.payload),
         }
 
     @classmethod

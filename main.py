@@ -31,6 +31,7 @@ async def main() -> None:  # pylint: disable=too-many-locals,too-many-statements
     from src.p2p.local_state import LocalAgentState
     from src.agents.inference import InferenceAgent
     from src.agents.validator import ValidatorAgent
+    from src.schema import load_bootstrap_schema
     from src.cli import run_cli
     from src.interfaces import MemoryService
     from src.llm import LLMTranslator
@@ -95,8 +96,10 @@ async def main() -> None:  # pylint: disable=too-many-locals,too-many-statements
 
     validator_memory = P2PMemoryClient(validator_node)
     validator_state = LocalAgentState()
+    schema = load_bootstrap_schema()
     validator_agent = ValidatorAgent(
-        memory=validator_memory, poll_interval=8.0, state=validator_state
+        memory=validator_memory, poll_interval=8.0, state=validator_state,
+        schema=schema,
     )
     validator_node.add_event_listener(validator_agent.on_network_event)
 
