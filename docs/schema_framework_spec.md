@@ -491,31 +491,73 @@ The `data/` directory must exist on the store node. In Docker, this is a volume 
 
 ## 10. Changes Summary
 
-Every file that needs modification, and what changes:
+### 10.1 Core — Schema data model and protocol
 
 | File | Change |
 |---|---|
 | `src/schema/loader.py` | Add `origin`, `reasoning`, `last_reviewed` to `PredicateInfo`. Add `origin`, `reasoning` to `ExclusivityGroup`. Add `to_dict()` and `from_dict()` to `PredicateSchema`. |
 | `src/schema/store.py` | **New file.** `SchemaStore` class: load, update, persist, version. |
-| `src/schema/__init__.py` | Export `SchemaStore`. |
+| `src/schema/__init__.py` | Export `SchemaStore`, `PredicateInfo`, `ExclusivityGroup`. |
 | `src/memory_protocol.py` | Add `get_schema()` and `update_schema()` to `MemoryAPI` protocol. |
 | `src/interfaces.py` | Add `schema_store` param to `MemoryService.__init__()`. Implement `get_schema()` and `update_schema()`. |
+
+### 10.2 P2P layer — routing, propagation, capabilities
+
+| File | Change |
+|---|---|
 | `src/p2p/memory_client.py` | Add `get_schema()` and `update_schema()` methods. |
 | `src/p2p/routing.py` | Add `get_schema` and `update_schema` to `METHOD_CAPABILITIES`. |
 | `src/p2p/types.py` | Add `Capability.SCHEMA` enum value. |
 | `src/p2p/node.py` | Broadcast `schema_updated` event after `update_schema` requests. Use TTL 5 for schema events. |
-| `src/agents/validator.py` | Listen for `schema_updated` events. Override `on_network_event()` for hot-reload. |
-| `run_node.py` | Create `SchemaStore` on store nodes. Fetch schema via `get_schema()` for validator startup. |
+
+### 10.3 Agents — hot-reload and startup fetch
+
+| File | Change |
+|---|---|
+| `src/agents/validator.py` | Add `"schema_updated"` to `event_types()`. Override `on_network_event()` to deserialize and swap `self._schema` on schema events. |
+| `run_node.py` | Create `SchemaStore` on store nodes and pass to `MemoryService`. Fetch schema via `get_schema()` for validator startup (bootstrap fallback). Add `Capability.SCHEMA` support in arg parsing (no agent started yet — that's Phase 2). |
 | `main.py` | Same `SchemaStore` wiring for dev mode. |
 
-### New files
+### 10.4 UI layer — dashboard visibility
+
+| File | Change |
+|---|---|
+| `src/p2p/ui_bridge.py` | Add `"schema_updated"` to `event_map` in `_on_network_event()` so the UI receives schema change events. Add `schema` section to `/v1/stats` response: `{"schema": {"version": N, "predicate_count": N, "learned_count": N}}`. Requires `SchemaStore` reference (passed via `mount_ui_bridge()` or fetched from node services). Add `"schema"` to `CAPABILITY_PRIORITY` list so schema agent nodes display correctly in the dashboard. |
+| `src/p2p/transport.py` | Update `mount_ui_bridge()` signature to accept optional `schema_store` parameter alongside `store`, for UI bridge schema access. |
+
+### 10.5 Infrastructure — Docker, env, Makefile
+
+| File | Change |
+|---|---|
+| `docker-compose.yml` | Add `schema_data` named volume. Mount to `/app/data` on `store-node` so the schema file persists across container restarts. Add `SCHEMA_PATH: /app/data/schema.yaml` to store-node environment. |
+| `.env.example` | Add `SCHEMA_PATH` with comment explaining default. |
+| `Makefile` | Add `dev-schema` target: `.venv/bin/python run_node.py --capabilities schema --port 9004 --bootstrap http://localhost:9000` (for Phase 2 testing). |
+| `Dockerfile` | Ensure `data/` directory is created in the image (`RUN mkdir -p /app/data`). |
+
+### 10.6 Documentation
+
+| File | Change |
+|---|---|
+| `CLAUDE.md` | Add `SCHEMA_PATH` to env var table. Add `schema` to capability table. Add `dev-schema` to make targets. Add `src/schema/store.py` to architecture file listing. Update architecture diagram to show schema flow. |
+
+### 10.7 Tests — new and updated
+
+| File | Change |
+|---|---|
+| `tests/test_schema.py` | Add tests for `PredicateSchema.from_dict()` / `to_dict()` round-trip. Test backward compatibility (bootstrap format without provenance fields). Test new `PredicateInfo` fields (`origin`, `reasoning`, `last_reviewed`). |
+| `tests/test_schema_store.py` | **New file.** Unit tests for `SchemaStore`: bootstrap seeding, load existing, update merge semantics, new predicate, modify existing, version increment, file persistence. Uses temp directory — no Neo4j needed. |
+| `tests/test_validator_unit.py` | Add test for `event_types()` including `"schema_updated"`. Add test for `on_network_event()` hot-reload: simulate schema_updated event, verify `self._schema` is swapped. |
+| `tests/test_p2p.py` | Update any tests that enumerate `Capability` values or `METHOD_CAPABILITIES` keys to include the new `SCHEMA` capability and schema methods. |
+
+### 10.8 New files
 
 | File | Purpose |
 |---|---|
 | `src/schema/store.py` | `SchemaStore` class |
-| `data/.gitkeep` | Ensure data directory exists in repo |
+| `tests/test_schema_store.py` | Unit tests for `SchemaStore` |
+| `data/.gitkeep` | Ensure data directory exists in repo (gitignored contents except `.gitkeep`) |
 
-### Not changed
+### 10.9 Not changed
 
 | File | Reason |
 |---|---|
@@ -524,6 +566,8 @@ Every file that needs modification, and what changes:
 | `src/agents/inference.py` | Schema-aware inference is Phase 4. |
 | `src/llm.py` | Schema-aware prompts are Phase 3–4. |
 | `src/store.py` | Schema is not stored in Neo4j. |
+| `src/cli.py` | CLI does not consume schema directly. |
+| `src/p2p/gossip.py` | Gossip protocol unchanged. Schema version in gossip metadata is a future enhancement (see 11.2). |
 
 ---
 
@@ -599,6 +643,6 @@ If the store node is down when an agent calls `get_schema()`, the agent falls ba
 
 ---
 
-*Document version: 1.0*
+*Document version: 1.1*
 *Last updated: 2026-02-02*
-*Status: Phase 1 spec — ready for review.*
+*Status: Phase 1 spec — ready for implementation.*
