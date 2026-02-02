@@ -75,17 +75,14 @@ export interface SystemStats {
   };
   knowledge: {
     observations: number;
-    claims: number;
-    entities: number;
-    triples: number;
+    statements: number;
+    concepts: number;
+    sources: number;
     relationships: number;
   };
   nodes: Record<string, NodeInfo[]>;
   // Legacy fields
   total_agents: number;
   active_agents: number;
-  total_observations: number;
-  total_claims: number;
-  total_entities: number;
   websocket_clients: number;
 }

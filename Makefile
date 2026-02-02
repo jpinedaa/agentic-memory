@@ -10,7 +10,8 @@ install: ## Install dependencies in venv
 	.venv/bin/pip install -e ".[dev]"
 
 dev: ## Run full stack in Docker (Neo4j + store/LLM + inference + validator + CLI)
-	docker compose --profile cli up --build
+	docker compose up --build -d
+	docker compose run --build --rm cli-node
 
 dev-store: ## Run just the store+llm node locally
 	.venv/bin/python run_node.py --capabilities store,llm --port 9000
@@ -27,7 +28,8 @@ dev-cli: ## Run a CLI node locally (bootstrap to localhost:9000)
 # ── Debug ──────────────────────────────────────────────────────────
 
 debug-agents: ## Run full stack with DEBUG logging for agents, LLM, and prompts
-	LOG_CONFIG=logging.debug-agents.json docker compose --profile cli up --build
+	docker compose up --build -d
+	LOG_CONFIG=logging.debug-agents.json docker compose run --build --rm cli-node
 
 # ── Testing ─────────────────────────────────────────────────────────
 #

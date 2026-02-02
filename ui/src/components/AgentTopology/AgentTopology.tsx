@@ -101,9 +101,9 @@ function NodeStatusSidebar({ agents, stats }: { agents: AgentStatus[]; stats: Sy
           <SectionHeader title="Knowledge" />
           <div style={{ padding: '6px 10px 10px' }}>
             <StatRow label="Observations" value={stats.knowledge.observations.toString()} />
-            <StatRow label="Claims" value={stats.knowledge.claims.toString()} />
-            <StatRow label="Entities" value={stats.knowledge.entities.toString()} />
-            <StatRow label="Triples" value={stats.knowledge.triples.toString()} />
+            <StatRow label="Statements" value={stats.knowledge.statements.toString()} />
+            <StatRow label="Concepts" value={stats.knowledge.concepts.toString()} />
+            <StatRow label="Sources" value={stats.knowledge.sources.toString()} />
             <StatRow label="Relationships" value={stats.knowledge.relationships.toString()} />
           </div>
         </>
