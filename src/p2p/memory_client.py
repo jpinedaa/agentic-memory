@@ -113,11 +113,17 @@ class P2PMemoryClient:
         result = await fn(**args)
 
         # After local observe/claim/flag_contradiction, broadcast event to network
-        if method in ("observe", "claim", "flag_contradiction"):
+        if method in ("observe", "claim"):
             await self._node._broadcast_event(method, {
                 "id": result,
                 "source": args.get("source", ""),
                 "text": args.get("text", ""),
+            })
+        elif method == "flag_contradiction":
+            await self._node._broadcast_event(method, {
+                "stmt_id_1": args["stmt_id_1"],
+                "stmt_id_2": args["stmt_id_2"],
+                "reason": args.get("reason", ""),
             })
 
         return result

@@ -82,18 +82,33 @@ def create_ui_bridge(node: PeerNode, store: TripleStore) -> APIRouter:
 
     async def _on_network_event(event_type: str, data: dict[str, Any]) -> None:
         """Forward P2P memory events to UI clients."""
-        event_map = {"observe": "observation", "claim": "claim", "schema_updated": "schema_updated"}
-        await _broadcast_to_ui({
-            "type": "memory_event",
-            "data": {
+        event_map = {"observe": "observation", "claim": "claim", "flag_contradiction": "contradiction", "schema_updated": "schema_updated"}
+        mapped = event_map.get(event_type, event_type)
+
+        if mapped == "contradiction":
+            text = f"Contradiction: {data.get('stmt_id_1', '')} vs {data.get('stmt_id_2', '')}"
+            reason = data.get("reason", "")
+            if reason:
+                text += f" — {reason}"
+            payload = {
+                "id": f"{data.get('stmt_id_1', '')}:{data.get('stmt_id_2', '')}",
+                "event": mapped,
+                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                "source": "validator",
+                "text": text,
+                "raw_content": text,
+            }
+        else:
+            payload = {
                 "id": data.get("id", ""),
-                "event": event_map.get(event_type, event_type),
+                "event": mapped,
                 "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                 "source": data.get("source", ""),
                 "text": data.get("text", ""),
                 "raw_content": data.get("text", ""),
-            },
-        })
+            }
+
+        await _broadcast_to_ui({"type": "memory_event", "data": payload})
 
     # Register as event listener on the node
     node.add_event_listener(_on_network_event)
